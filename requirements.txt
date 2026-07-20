@@ -1,0 +1,8 @@
+streamlit
+pyfhel
+# openfhe-python  # Pyfhel 적용이 어려울 경우 대체 후보
+anthropic
+requests
+python-dotenv
+pandas
+numpy
