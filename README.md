@@ -18,7 +18,6 @@
 | 항목 | 내용 |
 |---|---|
 | 개발 기간 | 2주 |
-| 개발 방식 | Claude Code (Claude Extension) 기반 AI 페어 프로그래밍 |
 | UI | Streamlit |
 | 배포 | AWS (EC2/ECS + S3) |
 
