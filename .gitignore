@@ -36,3 +36,16 @@ Thumbs.db
 # Project-specific: V-World/기상청 캐시 데이터 (원본 대용량 캐시 파일 제외, 폴더 구조는 유지)
 data/sample_dem/*
 !data/sample_dem/.gitkeep
+
+# 구조화 기준값 DB — 런타임에 스키마/샘플 데이터로 생성되는 파일이라 커밋 대상 아님
+src/db/*.db
+
+# RAG 벡터DB(ChromaDB) — 런타임에 조문 청크로부터 재생성되는 로컬 인덱스라 커밋 대상 아님
+src/rag/chroma_store/
+
+# 암호문 캐시 — scripts/generate_mock_ciphertexts.py가 생성하는 opaque 산출물
+src/db/ciphertext_cache.db
+src/he/public_context.bin
+
+# 관리기관(Mock HSM) 비밀키 — 서비스 코드에서 절대 import하지 않으며, 커밋도 절대 금지
+scripts/keys/

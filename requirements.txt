@@ -1,8 +1,11 @@
 streamlit
-pyfhel
-# openfhe-python  # Pyfhel 적용이 어려울 경우 대체 후보
-anthropic
+pydeck  # 관제센터 대시보드의 계획 건물 위치 지도 렌더링용 (라벨 없는 dark_no_labels 스타일 — 지명 표기 언어 혼용 방지)
+tenseal  # 군사시설 카테고리 실제 CKKS 연산 (src/he/encryption.py, scripts/generate_mock_ciphertexts.py, scripts/mock_authority_verify.py). CKKS 지원 + 이 환경(Python 3.13/Windows)에 prebuilt wheel 존재 (Pyfhel은 sdist만 있어 소스 빌드 필요해 보류)
+anthropic  # llm_summarize_node/AI Agent 채팅의 LLM 호출 우선순위 1순위 (src/graph/llm_client.py) — 없으면 Gemini로 폴백
+google-genai  # Claude API 키 미보유 시 대체 LLM (Gemini) — src/graph/llm_client.py
+langgraph  # 컴플라이언스 판정 파이프라인 그래프 오케스트레이션 (src/graph)
+langfuse   # 노드별 실행 span 트레이싱 — 민감 필드는 redact 래퍼(src/graph/tracing.py)로 마스킹 후 기록
 requests
 python-dotenv
-pandas
-numpy
+pytest  # 판정 로직 테스트 실행용
+chromadb   # RAG 벡터DB — 고시 조문 청크 색인/조회 (src/rag), 판정에는 관여하지 않고 근거 인용 전용

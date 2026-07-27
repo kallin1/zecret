@@ -9,3 +9,7 @@ docs/
 tests/
 README.md
 CLAUDE.md
+
+# 관리기관(Mock HSM) 비밀키 — 이미지에 절대 포함하지 않는다. 실제 배포에서는 이
+# scripts/mock_authority_verify.py 자체도 별도의 HSM 서비스로 교체되어야 한다.
+scripts/keys/

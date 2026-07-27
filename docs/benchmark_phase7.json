@@ -1,0 +1,28 @@
+{
+  "phase": 7,
+  "he_compute_node": {
+    "n": 30,
+    "mean_ms": 5.9828,
+    "median_ms": 4.5235,
+    "stdev_ms": 4.4953,
+    "min_ms": 3.693,
+    "max_ms": 27.1209
+  },
+  "he_compute_node_cold_start_ms": 339.3117,
+  "plain_compute_node": {
+    "n": 30,
+    "mean_ms": 0.0046,
+    "median_ms": 0.0036,
+    "stdev_ms": 0.004,
+    "min_ms": 0.003,
+    "max_ms": 0.0237
+  },
+  "he_vs_plain_speed_ratio": 1300.6,
+  "authority_verify_batching": {
+    "batch_size": 20,
+    "note": "이 Mock 환경은 같은 프로세스 안에서 함수 호출로 관리기관 검증을 흉내내므로 실제 네트워크 왕복(RTT)이 없다 — 그래서 배치 처리 자체의 시간 절감은 미미하거나 없다(워밍업 전에는 측정 순서에 따라 배치가 부당하게 빨라 보이는 콜드스타트 아티팩트가 있었음을 실제로 확인, 워밍업 후에는 유의미한 차이가 없었다). 실제 배포에서 authority_verify가 진짜 HSM API 호출로 교체되면, N번의 개별 요청을 1번의 배치 요청으로 묶는 것 자체가 N번의 네트워크 RTT를 1번으로 줄이는 효과를 낸다 — 그 절감은 여기서는 측정할 수 없고 RTT가 존재하는 실 환경에서만 나타난다.",
+    "individual_calls_total_ms": 1050.5964,
+    "single_batch_call_total_ms": 1078.2227,
+    "in_process_savings_pct": -2.6
+  }
+}

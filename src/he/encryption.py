@@ -1,37 +1,64 @@
-# CKKS 기반 Z값(높이) 암호화/복호화 — 서버 내부 전용, 복호화 결과가 이 모듈 밖으로 평문으로 나가면 안 됨
+# 군사시설 비행안전구역 고도제한 기준값(Z값) — 실제 TenSEAL CKKS 암호문 연산.
+#
+# 이 파일은 "서비스가 비밀키를 보유하지 않는다"는 CLAUDE.md 절대 원칙 1을 코드로
+# 강제하는 경계다: 여기서 다루는 모든 값은 _enc 접미사가 붙은 암호문뿐이고, 평문 Z값이
+# 등장하는 지점이 전혀 없다. 복호화(비밀키 필요)는 이 파일 어디에도 없으며,
+# scripts/mock_authority_verify.py(관리기관 HSM 자리) 안에서만 일어난다.
+#
+# 암호문(ciphertext_enc/diff_enc)은 항상 "직렬화된 bytes"로 다룬다 — 실제로 관리기관
+# HSM에 네트워크로 전송할 값과 동일한 형태를 이 프로세스 안에서도 유지하기 위함이다.
 
-from typing import Any, List
+from dataclasses import dataclass, field
 
+import tenseal as ts
 
-class CkksContext:
-    """CKKS 암호화 파라미터/키를 보관하는 컨텍스트 (Pyfhel 또는 OpenFHE 래퍼)"""
-    # TODO: Pyfhel(또는 OpenFHE) 컨텍스트 초기화. 파라미터는 작게 시작하고 필요 시에만 부트스트래핑 고려.
-    pass
-
-
-def create_context() -> CkksContext:
-    """CKKS 컨텍스트(파라미터+키) 생성"""
-    # TODO: 암호화 파라미터(poly_modulus_degree, scale 등) 설정 후 키 생성
-    raise NotImplementedError
-
-
-def encrypt_z(z_plain: float, ctx: CkksContext) -> Any:
-    """단일 Z값(높이, 평문)을 CKKS 암호문으로 암호화"""
-    # TODO: ctx를 이용해 z_plain을 암호화하여 ciphertext 반환
-    raise NotImplementedError
+from src.he.context import load_public_context
 
 
-def encrypt_z_batch(z_plain_list: List[float], ctx: CkksContext) -> Any:
-    """여러 Z값을 벡터화하여 배치 암호화 (행렬 연산 활용 권장)"""
-    # TODO: z_plain_list를 벡터로 묶어 암호화 (바이너리 단위 연산 대신 벡터 연산 우선 검토)
-    raise NotImplementedError
+@dataclass
+class HeightLimitCiphertext:
+    """군사시설 높이제한 기준값(Z값)의 CKKS 암호문 — 직렬화된 bytes만 담는다.
 
-
-def _decrypt_z_internal(z_enc: Any, ctx: CkksContext) -> float:
-    """[서버 내부 전용] 암호문을 복호화하여 평문 Z값 반환.
-
-    주의: 이 함수의 반환값은 he/compare.py 등 서버 내부 판정 로직에서만 사용해야 하며,
-    API 응답/로그/프론트엔드로 절대 그대로 전달하면 안 됨 (CLAUDE.md 절대 원칙 1).
+    scripts/generate_mock_ciphertexts.py(관리기관 오프라인 스크립트)가 비밀키로 암호화해
+    src.db.ciphertext_cache에 저장해 둔 것을, 서비스(src.compliance.config)가 그대로
+    읽어와 감싼 값이다. 이 객체 안에는 평문 필드가 전혀 없다.
     """
-    # TODO: ctx를 이용해 z_enc를 복호화
-    raise NotImplementedError
+
+    ciphertext_enc: bytes = field(repr=False)
+
+
+def load_height_limit_ciphertext(ciphertext_blob: bytes) -> HeightLimitCiphertext:
+    """암호문 캐시(src.db.ciphertext_cache)에서 읽은 opaque bytes를 그대로 감싼다.
+
+    복호화하지 않는다 — 이 함수는 단순히 캐시에서 읽은 bytes를 타입이 있는 객체로
+    감싸기만 한다.
+    """
+    return HeightLimitCiphertext(ciphertext_enc=ciphertext_blob)
+
+
+@dataclass
+class DiffCiphertext:
+    """(높이제한 암호문 - 계획높이 평문) 동형 뺄셈 결과의 직렬화된 bytes.
+
+    서비스는 이 값을 복호화하지 않는다 — 부호(초과 여부) 확인은 이 bytes를
+    scripts.mock_authority_verify.verify_diff()(관리기관 HSM 자리)로 전송해서만 받는다
+    (CLAUDE.md 절대 원칙 1).
+    """
+
+    diff_enc: bytes = field(repr=False)
+
+
+def compute_diff_ciphertext(
+    height_limit: HeightLimitCiphertext, plan_height_plain: float
+) -> DiffCiphertext:
+    """암호문(높이제한 Z값) - 평문(계획높이)의 동형 뺄셈 — 공개 컨텍스트(비밀키 없음)만 사용.
+
+    TenSEAL CKKS의 ciphertext-plaintext 뺄셈은 비밀키 없이 공개 컨텍스트만으로 계산
+    가능하다 (곱셈이 아니므로 relinearization/galois 키도 필요 없다 — 파라미터 선정
+    근거는 scripts/generate_mock_ciphertexts.py 참고). 이 함수는 diff를 복호화하지
+    않고 그대로 직렬화해 반환한다.
+    """
+    public_context = load_public_context()
+    height_limit_vec = ts.ckks_vector_from(public_context, height_limit.ciphertext_enc)
+    diff_vec = height_limit_vec - plan_height_plain
+    return DiffCiphertext(diff_enc=diff_vec.serialize())

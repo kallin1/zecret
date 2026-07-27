@@ -1,0 +1,88 @@
+{
+  "phase": 5,
+  "llm_mode": "fallback (ANTHROPIC_API_KEY 미설정)",
+  "scenarios": [
+    {
+      "label": "military+heritage+sunlight_setback (성남 서울공항/남한산성 인접 위치)",
+      "input": {
+        "plan_x_plain": 127.125,
+        "plan_y_plain": 37.126,
+        "plan_height_plain": 20.0,
+        "setback_distance_m": 3.0
+      },
+      "results": [
+        {
+          "facility_type": "sunlight_setback",
+          "facility_name": "인접대지경계선 (일조권 사선제한)",
+          "exceeds_limit": true,
+          "margin": -7.0,
+          "final_message": "[인접대지경계선 (일조권 사선제한)] 판정 결과: 위반"
+        },
+        {
+          "facility_type": "heritage",
+          "facility_name": "남한산성 역사문화환경보존지역",
+          "exceeds_limit": true,
+          "margin": -5.0,
+          "final_message": "[남한산성 역사문화환경보존지역] 판정 결과: 위반"
+        },
+        {
+          "facility_type": "military",
+          "facility_name": "성남 서울공항 비행안전구역",
+          "exceeds_limit": false,
+          "margin": null,
+          "final_message": "[성남 서울공항 비행안전구역] 판정 결과: 적합"
+        }
+      ]
+    },
+    {
+      "label": "military only, 위반 (계획높이 50m > 45m 기준)",
+      "input": {
+        "plan_x_plain": 127.125,
+        "plan_y_plain": 37.126,
+        "plan_height_plain": 50.0,
+        "setback_distance_m": 3.0
+      },
+      "results": [
+        {
+          "facility_type": "sunlight_setback",
+          "facility_name": "인접대지경계선 (일조권 사선제한)",
+          "exceeds_limit": true,
+          "margin": -22.0,
+          "final_message": "[인접대지경계선 (일조권 사선제한)] 판정 결과: 위반"
+        },
+        {
+          "facility_type": "heritage",
+          "facility_name": "남한산성 역사문화환경보존지역",
+          "exceeds_limit": true,
+          "margin": -35.0,
+          "final_message": "[남한산성 역사문화환경보존지역] 판정 결과: 위반"
+        },
+        {
+          "facility_type": "military",
+          "facility_name": "성남 서울공항 비행안전구역",
+          "exceeds_limit": true,
+          "margin": null,
+          "final_message": "[성남 서울공항 비행안전구역] 판정 결과: 위반"
+        }
+      ]
+    },
+    {
+      "label": "sunlight_setback only (인접 시설 반경 밖)",
+      "input": {
+        "plan_x_plain": 130.0,
+        "plan_y_plain": 35.0,
+        "plan_height_plain": 8.0,
+        "setback_distance_m": 1.0
+      },
+      "results": [
+        {
+          "facility_type": "sunlight_setback",
+          "facility_name": "인접대지경계선 (일조권 사선제한)",
+          "exceeds_limit": true,
+          "margin": -0.5,
+          "final_message": "[인접대지경계선 (일조권 사선제한)] 판정 결과: 위반"
+        }
+      ]
+    }
+  ]
+}

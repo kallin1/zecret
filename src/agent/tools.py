@@ -1,50 +1,35 @@
-# AI Agent(Claude function calling)가 호출할 tool 함수 정의 — 반환값은 판정 결과(구조화 데이터)만 포함, 원본 Z값 필드 금지
+# AI Agent(LLM function calling)가 호출할 tool 함수 정의 — 반환값은 판정 결과(구조화 데이터)만 포함, 원본 Z값 필드 금지
 
-from datetime import date as Date
 from typing import Any, Dict, List
 
-
-def tool_check_height_violation(
-    x_plain: float,
-    y_plain: float,
-    new_building_height_plain: float,
-    dataset_id: str,
-) -> Dict[str, Any]:
-    """[Agent tool] 지정 위치에 신축 건물을 지을 때 인근 공개제한시설 높이 기준 위반 여부 조회.
-
-    반환값은 exceeds_threshold/grade/reference_token 등 판정 결과 필드만 포함해야 하며,
-    원본 Z값(고도) 필드를 담아서는 안 된다 (CLAUDE.md 절대 원칙 1, 2).
-    """
-    # TODO: src.geo.range_search로 인근 시설 조회 → src.he.compare로 판정 → dict로 요약해 반환
-    raise NotImplementedError
+from src.graph.runner import run_full_compliance_check
 
 
-def tool_check_sunlight_violation(
-    x_plain: float,
-    y_plain: float,
-    new_building_height_plain: float,
-    target_date: Date,
-    dataset_id: str,
-) -> Dict[str, Any]:
-    """[Agent tool] 신축 건물로 인한 일조권 침해 여부 조회 (판정 결과 요약만 반환)"""
-    # TODO: src.geo.sunlight.judge_shadow_impact_batch 호출 후 결과 요약 dict 반환
-    raise NotImplementedError
-
-
-def tool_get_grid_risk_map(
-    x_min_plain: float,
-    y_min_plain: float,
-    x_max_plain: float,
-    y_max_plain: float,
-    dataset_id: str,
+def tool_check_height_compliance(
+    plan_x_plain: float,
+    plan_y_plain: float,
+    plan_height_plain: float,
+    setback_distance_m: float,
 ) -> List[Dict[str, Any]]:
-    """[Agent tool] 지정 범위의 격자 단위 위험도 목록 조회 (정밀 좌표/높이 미포함)"""
-    # TODO: src.geo.grid_render.aggregate_judgments_to_grid 결과를 dict 리스트로 반환
-    raise NotImplementedError
+    """[Agent tool] 신축 예정 건물 1건이 인접 국가유산/군사시설/일조권 사선제한 기준을 위반하는지 조회.
+
+    군사시설(비행안전구역) 기준값은 서버 내부에서만 복호화되어 비교에 쓰이고, 반환값에는
+    facility_type/facility_name/exceeds_limit/margin만 담는다 — facility_id, 근거 조문,
+    final_message 등 다른 필드는 이 tool의 공개 계약에 포함하지 않는다. 군사시설 항목의
+    margin은 항상 None이다 (CLAUDE.md 절대 원칙 1, 2).
+    """
+    report = run_full_compliance_check(plan_x_plain, plan_y_plain, plan_height_plain, setback_distance_m)
+    return [
+        {
+            "facility_type": item.facility_type,
+            "facility_name": item.facility_name,
+            "exceeds_limit": item.exceeds_limit,
+            "margin": item.margin,
+        }
+        for item in report
+    ]
 
 
 AGENT_TOOLS = [
-    tool_check_height_violation,
-    tool_check_sunlight_violation,
-    tool_get_grid_risk_map,
+    tool_check_height_compliance,
 ]
