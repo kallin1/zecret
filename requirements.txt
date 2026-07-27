@@ -1,5 +1,5 @@
 streamlit
-pydeck  # 관제센터 대시보드의 계획 건물 위치 지도 렌더링용 (라벨 없는 dark_no_labels 스타일 — 지명 표기 언어 혼용 방지)
+pydeck  # 관제센터 대시보드의 계획 건물 위치 지도 렌더링용 — VWORLD_API_KEY 설정 시 VWorld 실제 건물 타일(TileLayer), 미설정 시 라벨 없는 dark_no_labels 스타일로 폴백
 tenseal  # 군사시설 카테고리 실제 CKKS 연산 (src/he/encryption.py, scripts/generate_mock_ciphertexts.py, scripts/mock_authority_verify.py). CKKS 지원 + 이 환경(Python 3.13/Windows)에 prebuilt wheel 존재 (Pyfhel은 sdist만 있어 소스 빌드 필요해 보류)
 anthropic  # llm_summarize_node/AI Agent 채팅의 LLM 호출 우선순위 1순위 (src/graph/llm_client.py) — 없으면 Gemini로 폴백
 google-genai  # Claude API 키 미보유 시 대체 LLM (Gemini) — src/graph/llm_client.py

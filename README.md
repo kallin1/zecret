@@ -19,7 +19,7 @@
 |---|---|
 | 개발 기간 | 2주 |
 | UI | Streamlit |
-| 배포 | AWS (EC2/ECS + S3) |
+| 배포 | AWS EC2 (GitHub Actions CI/CD) |
 
 ---
 
@@ -107,7 +107,7 @@
 | LLM 호출 | `src/graph/llm_client.py`가 Claude/Gemini 공용 호출부 — `ANTHROPIC_API_KEY`가 있으면 Claude(`claude-sonnet-5` 기본값), 없고 `GEMINI_API_KEY`가 있으면 Gemini(`gemini-2.0-flash` 기본값), 둘 다 없거나 호출 실패 시 결정론적 템플릿/근거 나열로 폴백. `llm_summarize_node`와 AI Agent 채팅이 이 모듈을 공유 |
 | RAG | ChromaDB(`src/rag`) — 법령 조문 청크를 facility_id로 정확 조회해 근거 인용 전용으로 사용 (판정 비관여), 일반 법령 Q&A는 미구현 |
 | 트레이싱 | Langfuse(`src/graph/tracing.py`) — 노드별 span 기록, 민감 필드는 allowlist 방식으로 마스킹 |
-| 배포 | 단일 Dockerfile로 패키징한 컨테이너를 AWS EC2 또는 ECS에 배포 |
+| 배포 | 단일 Dockerfile로 패키징한 컨테이너를 AWS EC2에 배포. GitHub Actions(`.github/workflows/ci-cd.yml`)가 테스트→GHCR 이미지 push까지는 항상 수행하고, EC2 시크릿이 등록되면 이어서 자동 배포 — 자세한 내용은 "CI/CD 배포" 절 참고 |
 | 오케스트레이션 | LangGraph — `search_zone_node`→(조건부 분기)→`he_compute_node`/`plain_compute_node`→`authority_verify_node`(military만)→`rag_check_node`→`llm_summarize_node` 그래프 구현 완료 (`src/graph/build.py`, 시설 1건 판정용 레퍼런스/테스트 경로). Streamlit 대시보드(`app.py`)는 `src/graph/runner.py`의 `run_full_compliance_check()`를 사용하는데, 이 함수는 search_zone_node 없이 일조권(항상 1건) + 반경 내 국가유산·군사시설(각각 0건 이상)을 모두 열거해 서브그래프를 여러 번 실행 — 건물 1건이 세 카테고리를 동시에 위반해도 전부 표시됨 |
 | 구조화 기준값 DB | SQLite (`src/db`) — facility_id·regulation_type·height_limit_m 등 기준값을 저장, rag_check_node의 정확 대조(exact match)에 사용 |
 
@@ -179,9 +179,35 @@ LANGFUSE_SECRET_KEY=
 LANGFUSE_HOST=https://cloud.langfuse.com
 AWS_ACCESS_KEY_ID=your_aws_key
 AWS_SECRET_ACCESS_KEY=your_aws_secret
+VWORLD_API_KEY=your_vworld_api_key             # 없으면 지도가 라벨 없는 기본 dark 스타일로 폴백 (실제 건물 표시 안 됨)
 ```
 
 > ChromaDB(`src/rag`)는 최초 색인 시 로컬 임베딩 모델(all-MiniLM-L6-v2, ~80MB)을 한 번 내려받습니다 — 최초 실행 시에만 인터넷 연결이 필요하고, 이후에는 로컬 캐시를 사용합니다.
+
+### CI/CD 배포
+
+`.github/workflows/ci-cd.yml` 하나로 CI(test → build)와 CD(deploy)를 함께 관리한다. 대상은 **EC2 단일 인스턴스**(ECS는 채택 안 함 — 클러스터·태스크정의 등 관리형 인프라를 미리 만들어둬야 해서 이 프로젝트 규모에는 과함).
+
+| 잡 | 트리거 | 내용 |
+|---|---|---|
+| `test` | 모든 push/PR | `pytest -q` 실행. 추가 시크릿 없이 항상 돎 (`tests/conftest.py`가 Mock HE 아티팩트를 자동 준비하고, LLM API 키도 강제로 비워 결정론적 폴백 경로만 탐) |
+| `build-and-push` | `main` push | 이미지 빌드 전 `generate_mock_ciphertexts.py`로 암호문 캐시/공개 컨텍스트 생성 → Docker 이미지 빌드 → **GHCR**(`ghcr.io/<repo>`)에 push. `GITHUB_TOKEN`만 쓰므로 AWS 자격증명 없이 지금 바로 동작 |
+| `deploy` | `build-and-push` 성공 후 | EC2에 SSH 접속해 최신 이미지 pull 후 컨테이너 재시작. **`EC2_HOST` 시크릿이 없으면 실패가 아니라 스킵**되고, 아래 시크릿을 추가하는 순간 다음 `main` push부터 바로 배포까지 이어짐 |
+
+**서버 생성 후 GitHub 리포지토리 Settings → Secrets and variables → Actions에 추가해야 하는 값**
+
+| 시크릿 | 값 |
+|---|---|
+| `EC2_HOST` | EC2 퍼블릭 IP 또는 도메인 |
+| `EC2_USER` | SSH 접속 계정 (예: `ubuntu`, `ec2-user`) |
+| `EC2_SSH_KEY` | 위 계정으로 접속 가능한 SSH 프라이빗 키 전체 내용 |
+
+**EC2 쪽에 미리 준비해둬야 하는 것** (배포 스크립트가 가정하는 조건)
+
+- Docker 설치 및 `${EC2_USER}`가 `docker` 그룹에 속해 있을 것 (매 배포 시 `sudo` 없이 `docker` 명령 실행)
+- `ghcr.io/<이 리포지토리>` 패키지가 private이면, EC2가 pull할 때 쓰는 `GITHUB_TOKEN`이 해당 패키지에 대한 read 권한을 갖도록(같은 리포지토리 소유면 기본 설정으로 충분) — 안 되면 패키지를 public으로 전환하거나 별도 PAT로 교체
+- `/opt/zecret/.env`에 위 "환경 변수" 절 내용을 실제 값으로 채워 미리 배치 (이미지에는 절대 포함되지 않으므로 서버에 직접 있어야 함)
+- 인바운드 보안그룹에서 8501 포트(또는 앞단 리버스 프록시 포트) 허용
 
 ---
 

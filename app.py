@@ -18,13 +18,24 @@
 # 지도에는 계획 건물 위치 1개만 표시하고, 인접 국가유산/군사시설의 위치는 표시하지 않는다.
 
 import html
+import os
 from datetime import date
 
 import pydeck as pdk
 import streamlit as st
+from dotenv import load_dotenv
 
 from src.agent.router import handle_agent_query
 from src.graph.runner import run_full_compliance_check
+
+load_dotenv()
+
+# VWorld Open API(https://www.vworld.kr) WMTS 배경지도 — 실제 건물 폴리곤·도로·주소 라벨이 보이는
+# 공공 지도 타일. X/Y(위치)는 CLAUDE.md 원칙상 평문 취급 대상이라 타일 요청에 Z값은 전혀 실리지 않는다.
+# "midnight"(야간모드) 레이어를 골라 관제센터 다크 테마와 톤을 맞춘다. 키 미발급 시 라벨 없는 기본
+# pydeck 스타일로 자동 폴백한다.
+VWORLD_API_KEY = os.environ.get("VWORLD_API_KEY", "")
+VWORLD_TILE_URL = f"https://api.vworld.kr/req/wmts/1.0.0/{VWORLD_API_KEY}/midnight/{{z}}/{{y}}/{{x}}.png"
 
 CATEGORY_ORDER = ["sunlight_setback", "heritage", "military"]
 CATEGORY_LABEL = {
@@ -42,7 +53,12 @@ STATUS_GOOD = "#0ca30c"
 STATUS_CRITICAL = "#d03b3b"
 MUTED = "#898781"
 
-st.set_page_config(page_title="ZeCret — Height Compliance Control Center", page_icon="🛰", layout="wide")
+st.set_page_config(
+    page_title="ZeCret — Height Compliance Control Center",
+    page_icon="🛰",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 
 st.markdown(
     f"""
@@ -96,6 +112,9 @@ st.markdown(
     section[data-testid="stSidebar"] .zc-panel-title {{ margin-top: 4px; }}
     /* 사이드바 폼 입력창에 뜨는 "Press Enter to submit form" 힌트 숨김 */
     div[data-testid="InputInstructions"] {{ display: none; }}
+    /* Control Panel을 닫는 것만 막는다 — 펼치기 버튼까지 숨기면 브라우저가 접힌 상태를
+       기억하고 있을 때(localStorage) 다시 열 방법이 없어져 사이드바가 영영 안 보이게 된다. */
+    button[data-testid="stSidebarCollapseButton"] {{ display: none; }}
     </style>
     <div class="zc-gridbg"></div>
     """,
@@ -175,8 +194,6 @@ map_col, status_col = st.columns([1, 2])
 
 with map_col:
     st.markdown('<div class="zc-panel-title">▌ 계획 건물 위치</div>', unsafe_allow_html=True)
-    # 지명 라벨이 있는 배경지도는 확대/축소 단계에 따라 영문/한글이 뒤섞여 보이는 문제가 있어,
-    # 라벨이 아예 없는 스타일(dark_no_labels)을 써서 언어 혼용 자체를 없앤다.
     marker_layer = pdk.Layer(
         "ScatterplotLayer",
         data=[{"lat": map_y, "lon": map_x}],
@@ -186,15 +203,37 @@ with map_col:
         radius_min_pixels=8,
         radius_max_pixels=40,
     )
-    st.pydeck_chart(
-        pdk.Deck(
+    if VWORLD_API_KEY:
+        # 실제 건물 폴리곤이 보이는 VWorld 타일을 배경으로 직접 그린다 — pydeck 자체 Mapbox/Carto
+        # 배경지도(map_style)는 끄고(map_provider=None) TileLayer로 대체한다.
+        tile_layer = pdk.Layer(
+            "TileLayer",
+            data=VWORLD_TILE_URL,
+            min_zoom=0,
+            max_zoom=19,
+            tile_size=256,
+        )
+        deck = pdk.Deck(
+            layers=[tile_layer, marker_layer],
+            initial_view_state=pdk.ViewState(latitude=map_y, longitude=map_x, zoom=17),
+            map_provider=None,
+            # map_style를 명시적으로 비우지 않으면 pydeck이 내부 플레이스홀더 문자열
+            # "__MAP_STYLE__"을 그대로 흘려보내 프론트엔드 베이스맵 초기화가 깨진다.
+            map_style=None,
+        )
+    else:
+        # 지명 라벨이 있는 배경지도는 확대/축소 단계에 따라 영문/한글이 뒤섞여 보이는 문제가 있어,
+        # 라벨이 아예 없는 스타일(dark_no_labels)을 써서 언어 혼용 자체를 없앤다.
+        deck = pdk.Deck(
             layers=[marker_layer],
             initial_view_state=pdk.ViewState(latitude=map_y, longitude=map_x, zoom=13),
             map_style="dark_no_labels",
         )
-    )
+    st.pydeck_chart(deck)
     if searched_inputs is None:
         st.caption("검색 전 기본 위치입니다. 좌측에서 검색하면 계획 건물 위치로 갱신됩니다.")
+    if not VWORLD_API_KEY:
+        st.caption("VWORLD_API_KEY 미설정 — 실제 건물이 보이는 배경지도를 쓰려면 .env에 키를 추가하세요.")
     st.caption("인접 국가유산/군사시설의 위치는 지도에 표시하지 않습니다.")
 
 with status_col:

@@ -1,0 +1,95 @@
+name: CI/CD
+
+# CI(test → build) 는 항상 돈다. CD(deploy)는 EC2_HOST 시크릿이 아직 없으면 조용히 스킵되고,
+# GitHub Secrets에 EC2_HOST/EC2_USER/EC2_SSH_KEY를 추가하는 즉시 다음 main push부터 자동 활성화된다.
+# 필요한 시크릿·서버 사전 준비물은 README.md의 "CI/CD 배포" 절 참고.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.10" 
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run test suite
+        run: pytest -q
+
+  build-and-push:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install dependencies (Mock 암호문 캐시 생성에 필요)
+        run: pip install -r requirements.txt
+
+      - name: Generate mock ciphertext cache + public HE context
+        # Dockerfile은 src/db/ciphertext_cache.db · src/he/public_context.bin이
+        # 이미 만들어져 있다고 가정하고 COPY만 한다 (README "Docker로 실행" 절과 동일 순서).
+        # scripts/keys/(비밀 컨텍스트)는 .dockerignore로 이미지에서 항상 제외된다.
+        run: python scripts/generate_mock_ciphertexts.py
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.sha }}
+
+  deploy:
+    needs: build-and-push
+    # EC2_HOST가 비어 있으면(서버 미생성) 실패가 아니라 스킵된다 — 시크릿 등록 후 재실행하면 그대로 배포로 이어진다.
+    if: ${{ secrets.EC2_HOST != '' }}
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read # EC2에서 GITHUB_TOKEN으로 ghcr.io private 이미지를 pull하기 위함
+    steps:
+      - name: Deploy to EC2 over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+            echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+            docker pull "${{ env.IMAGE }}:latest"
+            docker stop zecret 2>/dev/null || true
+            docker rm zecret 2>/dev/null || true
+            # 서버에 미리 준비해 둔 프로덕션 .env(ANTHROPIC_API_KEY/VWORLD_API_KEY 등)를 그대로 주입한다.
+            docker run -d --name zecret --restart unless-stopped \
+              -p 8501:8501 --env-file /opt/zecret/.env \
+              "${{ env.IMAGE }}:latest"
