@@ -64,13 +64,14 @@ jobs:
 
   deploy:
     needs: build-and-push
-    # EC2_HOST가 비어 있으면(서버 미생성) 실패가 아니라 스킵된다 — 시크릿 등록 후 재실행하면 그대로 배포로 이어진다.
-    if: ${{ secrets.EC2_HOST != '' }}
     runs-on: ubuntu-latest
     permissions:
       packages: read # EC2에서 GITHUB_TOKEN으로 ghcr.io private 이미지를 pull하기 위함
     steps:
       - name: Deploy to EC2 over SSH
+        # EC2_HOST가 비어 있으면(서버 미생성) 실패가 아니라 스킵된다 — 시크릿 등록 후 재실행하면 그대로 배포로 이어진다.
+        # secrets 컨텍스트는 job 레벨 if에서는 쓸 수 없고 step 레벨 if에서만 허용되므로 여기 위치한다.
+        if: ${{ secrets.EC2_HOST != '' }}
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
