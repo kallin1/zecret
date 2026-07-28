@@ -18,9 +18,11 @@ COPY data/ data/
 # 교체되어야 하며, 이 이미지에는 비밀키를 다루는 코드가 전혀 포함되어서는 안 된다.
 COPY scripts/ scripts/
 
-# 이미지 빌드 전 `python scripts/generate_mock_ciphertexts.py`를 로컬에서 먼저 실행해
-# src/db/ciphertext_cache.db와 src/he/public_context.bin을 준비해 두어야 한다 — 이
-# 파일들은 COPY src/ src/에 포함되어 함께 패키징된다 (비밀키는 포함되지 않는다).
+# src/db/ciphertext_cache.db와 src/he/public_context.bin은 `python scripts/generate_mock_ciphertexts.py`를
+# 로컬에서 1회 실행해 만든 뒤 저장소에 커밋해 둔 고정 산출물이다 — opaque 암호문/공개키라 커밋해도
+# 안전하며, COPY src/ src/에 포함되어 함께 패키징된다. 비밀키(scripts/keys/)는 포함되지 않으며,
+# 배포 시 EC2에 scp로 별도 배치 후 docker run -v로 마운트한다 (README "CI/CD 배포" 절 참고).
+# 키를 교체하려면 위 스크립트를 --force로 다시 돌려 두 파일을 재커밋하고, scripts/keys/도 새로 scp해야 한다.
 
 EXPOSE 8501
 

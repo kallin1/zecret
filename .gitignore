@@ -43,9 +43,13 @@ src/db/*.db
 # RAG 벡터DB(ChromaDB) — 런타임에 조문 청크로부터 재생성되는 로컬 인덱스라 커밋 대상 아님
 src/rag/chroma_store/
 
-# 암호문 캐시 — scripts/generate_mock_ciphertexts.py가 생성하는 opaque 산출물
-src/db/ciphertext_cache.db
-src/he/public_context.bin
+# 암호문 캐시 / 공개 컨텍스트 — scripts/generate_mock_ciphertexts.py가 생성하는 opaque
+# 산출물(ciphertext_blob, evaluation key)이라 커밋해도 정보가 새지 않는다. 오히려 커밋해둬야
+# CI가 매 빌드마다 새 키쌍을 만들지 않고, EC2에 1회 배치해둔 비밀키(scripts/keys/, 아래 참고)와
+# 계속 짝이 맞는 상태를 유지한다 — 여기서 재생성하려면 --force로 명시적으로 다시 돌릴 것.
+!src/db/ciphertext_cache.db
+!src/he/public_context.bin
 
-# 관리기관(Mock HSM) 비밀키 — 서비스 코드에서 절대 import하지 않으며, 커밋도 절대 금지
+# 관리기관(Mock HSM) 비밀키 — 서비스 코드에서 절대 import하지 않으며, 커밋도 절대 금지.
+# EC2에는 git이 아니라 scp로 1회 배치하고 docker run -v로 마운트한다 (README "CI/CD 배포" 참고).
 scripts/keys/

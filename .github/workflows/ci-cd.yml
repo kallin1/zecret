@@ -39,19 +39,12 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install dependencies (Mock 암호문 캐시 생성에 필요)
-        run: pip install -r requirements.txt
-
-      - name: Generate mock ciphertext cache + public HE context
-        # Dockerfile은 src/db/ciphertext_cache.db · src/he/public_context.bin이
-        # 이미 만들어져 있다고 가정하고 COPY만 한다 (README "Docker로 실행" 절과 동일 순서).
-        # scripts/keys/(비밀 컨텍스트)는 .dockerignore로 이미지에서 항상 제외된다.
-        run: python scripts/generate_mock_ciphertexts.py
+        # src/db/ciphertext_cache.db · src/he/public_context.bin은 이제 저장소에 커밋된
+        # 고정 산출물이라 checkout만으로 준비된다 — CI가 빌드마다 새로 만들지 않는다.
+        # 새로 만들면 EC2에 1회 배치해 둔 비밀키(scripts/keys/)와 짝이 어긋나 군사시설
+        # 판정이 전부 복호화 실패로 깨진다. 키를 실제로 교체할 땐 로컬에서
+        # `python scripts/generate_mock_ciphertexts.py --force`를 수동으로 돌려 두
+        # 산출물을 다시 커밋하고, scripts/keys/도 EC2에 새로 scp해야 한다.
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -90,6 +83,10 @@ jobs:
             docker stop zecret 2>/dev/null || true
             docker rm zecret 2>/dev/null || true
             # 서버에 미리 준비해 둔 프로덕션 .env(ANTHROPIC_API_KEY/VWORLD_API_KEY 등)를 그대로 주입한다.
+            # /opt/zecret/keys(관리기관 비밀키, scp로 1회 배치)는 이미지에는 절대 넣지 않고
+            # 볼륨으로만 마운트한다 — authority_verify_node가 호출하는
+            # scripts/mock_authority_verify.py가 컨테이너 안에서 이 경로를 읽는다.
             docker run -d --name zecret --restart unless-stopped \
               -p 8501:8501 --env-file /opt/zecret/.env \
+              -v /opt/zecret/keys:/app/scripts/keys:ro \
               "${{ env.IMAGE }}:latest"

@@ -122,9 +122,9 @@
 | 인접 군사시설 참조 데이터 | `src/compliance/config.py`에 하드코딩 | 샘플 좌표/높이제한(성남 서울공항 비행안전구역), 실 데이터 연동은 이후 단계이며 높이제한 값은 비공개 취급 |
 | 구조화 기준값 DB | `src/db`(SQLite, 런타임 생성) | facility_id별 height_limit_m·근거 법령·고시일 등을 저장, LangGraph의 `rag_check_node`가 정확 대조에 사용 (문서 임베딩 기반 벡터 검색인 `src/rag`와는 별개) |
 | RAG 벡터DB(근거 조문) | `src/rag`(ChromaDB, 런타임 생성) | 건축법·문화재보호법·군사기지법 조문 청크 + facility_id/regulation_type/effective_date/superseded_by 메타데이터. `llm_summarize_node`가 facility_id로 정확 조회해 설명문 근거로만 사용, 판정에는 관여하지 않음 |
-| 암호문 캐시 | `src/db/ciphertext_cache.py`(SQLite, `scripts/generate_mock_ciphertexts.py`가 생성) | facility_id·`ciphertext_blob`(opaque bytes)·`he_context_version`·`issued_at`·`expires_at`만 저장 — 원본 Z값은 이 테이블에 존재하지 않음 |
-| 공개 컨텍스트(evaluation key) | `src/he/public_context.bin`(`scripts/generate_mock_ciphertexts.py`가 생성) | `src/he/context.py`가 로드해 `he_compute_node`의 동형 뺄셈에 사용. 비밀키는 포함하지 않음 |
-| 관리기관 비밀키 | `scripts/keys/authority_secret_context.bin`(`scripts/generate_mock_ciphertexts.py`가 생성) | `scripts/mock_authority_verify.py`만 로드. 서비스 코드(`src/`, `app.py`)는 이 파일을 참조하지 않으며, `.gitignore`/`.dockerignore`에 모두 등록되어 커밋·이미지 어디에도 포함되지 않음 |
+| 암호문 캐시 | `src/db/ciphertext_cache.db`(SQLite, `scripts/generate_mock_ciphertexts.py`로 1회 생성 후 저장소에 커밋된 고정 산출물) | facility_id·`ciphertext_blob`(opaque bytes)·`he_context_version`·`issued_at`·`expires_at`만 저장 — 원본 Z값은 이 테이블에 존재하지 않아 커밋해도 안전 |
+| 공개 컨텍스트(evaluation key) | `src/he/public_context.bin`(위와 동일하게 1회 생성 후 커밋) | `src/he/context.py`가 로드해 `he_compute_node`의 동형 뺄셈에 사용. 비밀키는 포함하지 않음 |
+| 관리기관 비밀키 | `scripts/keys/authority_secret_context.bin`(`scripts/generate_mock_ciphertexts.py`가 생성) | `scripts/mock_authority_verify.py`만 로드. 서비스 코드(`src/`, `app.py`)는 이 파일을 참조하지 않으며, `.gitignore`/`.dockerignore`에 모두 등록되어 커밋·이미지 어디에도 포함되지 않는다 — EC2에는 scp로 배치 후 `docker run -v`로 마운트(위 CI/CD 배포 절 참고) |
 
 ---
 
@@ -159,11 +159,13 @@ Phase 7 벤치마크(Mock 평문 연산 대 실제 CKKS 연산 속도 비교, �
 python scripts/benchmark_he.py
 ```
 
-Docker로 실행 (단일 컨테이너, app.py + src/he·compliance·db·graph·agent·rag·scripts 전체 포함). 이미지 빌드 전 위 `generate_mock_ciphertexts.py`를 로컬에서 먼저 실행해 두어야 암호문 캐시/공개 컨텍스트가 이미지에 함께 담긴다 (`scripts/keys/`의 비밀키는 `.dockerignore`로 항상 제외됨):
+Docker로 실행 (단일 컨테이너, app.py + src/he·compliance·db·graph·agent·rag·scripts 전체 포함). 암호문 캐시/공개 컨텍스트(`src/db/ciphertext_cache.db`, `src/he/public_context.bin`)는 저장소에 커밋된 고정 산출물이라 별도 준비 없이 바로 빌드된다. 다만 `scripts/keys/`의 비밀키는 `.dockerignore`로 이미지에서 항상 제외되므로, 로컬 실행 시 군사시설(HE) 판정을 테스트하려면 저장소 checkout에 `scripts/keys/authority_secret_context.bin`이 이미 있어야 한다(최초 1회 `python scripts/generate_mock_ciphertexts.py` 실행 시 함께 생성됨):
 
 ```bash
 docker build -t zecret .
-docker run --rm -p 8501:8501 --env-file .env zecret
+docker run --rm -p 8501:8501 --env-file .env \
+  -v "$(pwd)/scripts/keys:/app/scripts/keys:ro" \
+  zecret
 ```
 
 ### 환경 변수 (예시)
@@ -191,8 +193,8 @@ VWORLD_API_KEY=your_vworld_api_key             # 없으면 지도가 라벨 없�
 | 잡 | 트리거 | 내용 |
 |---|---|---|
 | `test` | 모든 push/PR | `pytest -q` 실행. 추가 시크릿 없이 항상 돎 (`tests/conftest.py`가 Mock HE 아티팩트를 자동 준비하고, LLM API 키도 강제로 비워 결정론적 폴백 경로만 탐) |
-| `build-and-push` | `main` push | 이미지 빌드 전 `generate_mock_ciphertexts.py`로 암호문 캐시/공개 컨텍스트 생성 → Docker 이미지 빌드 → **GHCR**(`ghcr.io/<repo>`)에 push. `GITHUB_TOKEN`만 쓰므로 AWS 자격증명 없이 지금 바로 동작 |
-| `deploy` | `build-and-push` 성공 후 | EC2에 SSH 접속해 최신 이미지 pull 후 컨테이너 재시작. **`EC2_HOST` 시크릿이 없으면 실패가 아니라 스킵**되고, 아래 시크릿을 추가하는 순간 다음 `main` push부터 바로 배포까지 이어짐 |
+| `build-and-push` | `main` push | checkout 후 바로 Docker 이미지 빌드 → **GHCR**(`ghcr.io/<repo>`)에 push. 암호문 캐시/공개 컨텍스트는 저장소에 커밋된 고정 산출물을 그대로 쓰며, **CI가 매 빌드마다 새 키쌍을 만들지 않는다** — 그러면 EC2에 미리 배치해 둔 비밀키와 짝이 어긋나 군사시설 판정이 복호화 실패로 깨지기 때문. 키를 실제로 교체하려면 로컬에서 `python scripts/generate_mock_ciphertexts.py --force`를 수동으로 돌려 두 산출물을 재커밋하고, 아래 `scripts/keys/`도 EC2에 새로 scp해야 한다 |
+| `deploy` | `build-and-push` 성공 후 | EC2에 SSH 접속해 최신 이미지 pull 후 컨테이너 재시작(`scripts/keys/`를 볼륨으로 마운트). **`EC2_HOST` 시크릿이 없으면 실패가 아니라 스킵**되고, 아래 시크릿을 추가하는 순간 다음 `main` push부터 바로 배포까지 이어짐 |
 
 **서버 생성 후 GitHub 리포지토리 Settings → Secrets and variables → Actions에 추가해야 하는 값**
 
@@ -207,6 +209,11 @@ VWORLD_API_KEY=your_vworld_api_key             # 없으면 지도가 라벨 없�
 - Docker 설치 및 `${EC2_USER}`가 `docker` 그룹에 속해 있을 것 (매 배포 시 `sudo` 없이 `docker` 명령 실행)
 - `ghcr.io/<이 리포지토리>` 패키지가 private이면, EC2가 pull할 때 쓰는 `GITHUB_TOKEN`이 해당 패키지에 대한 read 권한을 갖도록(같은 리포지토리 소유면 기본 설정으로 충분) — 안 되면 패키지를 public으로 전환하거나 별도 PAT로 교체
 - `/opt/zecret/.env`에 위 "환경 변수" 절 내용을 실제 값으로 채워 미리 배치 (이미지에는 절대 포함되지 않으므로 서버에 직접 있어야 함)
+- `/opt/zecret/keys/authority_secret_context.bin`(관리기관 비밀키)을 미리 배치 — 로컬에서 `python scripts/generate_mock_ciphertexts.py` 실행 시 생성되는 `scripts/keys/` 디렉터리를 그대로 scp해서 올린다. 이 키는 git에도 이미지에도 절대 포함되지 않으므로 EC2에 직접 올리는 것 외엔 전달 방법이 없다:
+  ```bash
+  scp -r scripts/keys ubuntu@<EC2 퍼블릭 IP>:/opt/zecret/
+  ```
+  이 파일이 없으면 컨테이너는 뜨지만 군사시설(HE) 카테고리 판정 시 `FileNotFoundError`로 실패한다(`scripts/mock_authority_verify.py`) — 문화재/일조권(평문) 판정에는 영향 없음
 - 인바운드 보안그룹에서 8501 포트(또는 앞단 리버스 프록시 포트) 허용
 
 ---
