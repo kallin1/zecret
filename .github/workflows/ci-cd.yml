@@ -68,10 +68,20 @@ jobs:
     permissions:
       packages: read # EC2에서 GITHUB_TOKEN으로 ghcr.io private 이미지를 pull하기 위함
     steps:
+      - name: Check EC2 secret
+        # secrets 컨텍스트는 if: 표현식 안에서 직접 참조할 수 없다(job/step 레벨 모두) — run:에서
+        # 값을 읽어 output으로 내보낸 뒤, 그 output으로 다음 스텝의 if:를 건다.
+        id: check
+        run: |
+          if [ -n "${{ secrets.EC2_HOST }}" ]; then
+            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Deploy to EC2 over SSH
         # EC2_HOST가 비어 있으면(서버 미생성) 실패가 아니라 스킵된다 — 시크릿 등록 후 재실행하면 그대로 배포로 이어진다.
-        # secrets 컨텍스트는 job 레벨 if에서는 쓸 수 없고 step 레벨 if에서만 허용되므로 여기 위치한다.
-        if: ${{ secrets.EC2_HOST != '' }}
+        if: steps.check.outputs.should_deploy == 'true'
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.EC2_HOST }}
