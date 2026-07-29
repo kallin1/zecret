@@ -93,9 +93,14 @@ jobs:
           script: |
             set -e
             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-            docker pull "${{ env.IMAGE }}:latest"
             docker stop zecret 2>/dev/null || true
             docker rm zecret 2>/dev/null || true
+            # 컨테이너를 먼저 내려 이전 이미지가 어떤 컨테이너에도 참조되지 않게 한 뒤 정리한다.
+            # 이 EC2는 zecret 컨테이너 하나만 도는 단일 목적 배포 호스트라, 참조 없는 이미지를
+            # 전부 지워도 안전하다 — 매 배포마다 이전 이미지가 그대로 쌓여 디스크가 가득 차서
+            # (no space left on device) docker pull의 레이어 추출이 실패하던 문제를 막기 위함.
+            docker image prune -af
+            docker pull "${{ env.IMAGE }}:latest"
             # 서버에 미리 준비해 둔 프로덕션 .env(CLOVASTUDIO_API_KEY/VWORLD_API_KEY 등)를 그대로 주입한다.
             # /opt/zecret/keys(관리기관 비밀키, scp로 1회 배치)는 이미지에는 절대 넣지 않고
             # 볼륨으로만 마운트한다 — authority_verify_node가 호출하는
