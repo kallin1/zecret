@@ -17,14 +17,15 @@ from typing import Any, Callable, Dict, List
 CLOVASTUDIO_BASE_URL = "https://clovastudio.stream.ntruss.com"
 
 
-def call_llm(system_prompt: str, user_prompt: str) -> str:
+def call_llm(system_prompt: str, user_prompt: str, max_tokens: int = 400) -> str:
     """CLOVASTUDIO_API_KEY로 CLOVA Studio(HyperCLOVA X)를 호출한다.
 
-    키 미설정이면 RuntimeError — 호출부에서 잡아 폴백 문구를 쓴다.
+    키 미설정이면 RuntimeError — 호출부에서 잡아 폴백 문구를 쓴다. max_tokens는 호출부마다
+    필요한 응답 길이가 달라(판정 요약은 짧게, 채팅 답변은 길게) 인자로 노출한다.
     """
     if not os.environ.get("CLOVASTUDIO_API_KEY"):
         raise RuntimeError("no LLM API key configured (CLOVASTUDIO_API_KEY)")
-    return _call_clovastudio(system_prompt, user_prompt)
+    return _call_clovastudio(system_prompt, user_prompt, max_tokens)
 
 
 def _clovastudio_headers() -> Dict[str, str]:
@@ -35,7 +36,7 @@ def _clovastudio_headers() -> Dict[str, str]:
     }
 
 
-def _call_clovastudio(system_prompt: str, user_prompt: str) -> str:
+def _call_clovastudio(system_prompt: str, user_prompt: str, max_tokens: int = 400) -> str:
     import requests
 
     model = os.environ.get("CLOVASTUDIO_MODEL", "HCX-005")
@@ -47,7 +48,7 @@ def _call_clovastudio(system_prompt: str, user_prompt: str) -> str:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "maxTokens": 400,
+            "maxTokens": max_tokens,
         },
         timeout=15,
     )

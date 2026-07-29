@@ -11,11 +11,36 @@
 # 옛 암호문"과 "그 이후 fixture가 새로 생성한 비밀키"가 서로 어긋나 잘못된 키로 복호화하는
 # 조용한 실패가 난다 — 로컬처럼 scripts/keys/가 이미 있으면(조기 반환) 드러나지 않는다.
 
+import os
+
 import pytest
 
+# query_budget.py는 DEFAULT_QUERY_BUDGET을 모듈 import 시점에 한 번만 계산하므로, 로컬 .env에
+# 데모용으로 낮춰둔 HE_QUERY_BUDGET_PER_REGULATION이 남아있으면 그 값이 테스트 전체에 고정돼
+# 버린다(autouse 픽스처의 monkeypatch는 import 이후에 실행되어 되돌릴 수 없다). 그냥 지우기만
+# 하면 소용없다 — 아래 import가 트리거하는 query_budget.py 자신의 load_dotenv() 호출이
+# python-dotenv의 기본 동작(override=False, 즉 "os.environ에 없을 때만 채움")에 따라 .env
+# 파일에서 다시 읽어 채워 넣기 때문이다. 그래서 지우는 대신 원래 하드코드 기본값(50)으로
+# 미리 못박아, load_dotenv()가 이미 설정된 값을 건드리지 못하게 한다.
+os.environ["HE_QUERY_BUDGET_PER_REGULATION"] = "50"
+
 from scripts.generate_mock_ciphertexts import generate_and_store_ciphertexts
+from src.security.query_budget import reset_query_budget
 
 generate_and_store_ciphertexts()
+
+
+@pytest.fixture(autouse=True)
+def _reset_he_query_budget():
+    """테스트마다 (facility_id, regulation_theme) 질의 카운터를 초기화한다.
+
+    이 인메모리 카운터는 프로덕션 경로(src/graph, app.py)에서는 절대 리셋되지 않는다
+    (query_budget.py 참고) — 여기서 리셋하지 않으면 한 테스트 세션 안에서 여러 테스트가
+    같은 군사시설/규정 테마를 반복 호출하다 예산을 소진해, 실제로는 문제 없는 테스트가
+    QueryBudgetExceededError로 실패하게 된다.
+    """
+    reset_query_budget()
+    yield
 
 
 @pytest.fixture(autouse=True)

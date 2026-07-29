@@ -21,6 +21,7 @@ from src.graph.llm_client import call_llm
 from src.graph.state import ComplianceState
 from src.he.encryption import compute_diff_ciphertext
 from src.rag.qa import get_citations_for_facility
+from src.security.query_budget import consume_query_budget
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -93,10 +94,22 @@ def authority_verify_node(state: ComplianceState) -> Dict[str, Any]:
     diff 암호문(직렬화된 bytes)의 부호(초과 여부)만 확인한다. 실제 배포에서는 이 호출이
     관리기관 HSM API 엔드포인트 호출로 교체된다.
 
+    복호화(verify_diff) 직전에 (facility_id, regulation_theme) 조합의 누적 질의 예산을
+    확인한다 — 반복 질의로 Z값을 이진탐색 역산하는 오라클 공격을 막기 위함이다
+    (src/security/query_budget.py, docs/oracle_defense.md). 예산을 넘기면
+    QueryBudgetExceededError를 그대로 던져 호출부(app.py)가 판정 거부로 처리하게 한다 —
+    exceeds_limit을 임의로 지어내지 않는다.
+
+    반환하는 he_query_count는 Z값이 아니라 "이 규정에 몇 번째 질의인지"를 나타내는 순수
+    카운터라 노출해도 원칙 1·2를 위반하지 않는다 — traced_node(src/graph/tracing.py)가
+    이 값을 Langfuse span에 그대로 실어, 예산 소진에 가까워지는 패턴을 모니터링할 수
+    있게 한다.
+
     margin은 군사시설 카테고리이므로 항상 None (CLAUDE.md 절대 원칙 1, 2).
     """
+    query_count = consume_query_budget(state["facility_id"], state.get("regulation_theme") or "default")
     exceeds = verify_diff(state["diff_ciphertext"].diff_enc)
-    return {"computation_result": {"exceeds_limit": exceeds, "margin": None}}
+    return {"computation_result": {"exceeds_limit": exceeds, "margin": None}, "he_query_count": query_count}
 
 
 def plain_compute_node(state: ComplianceState) -> Dict[str, Any]:
@@ -127,7 +140,8 @@ def rag_check_node(state: ComplianceState) -> Dict[str, Any]:
 _LLM_SYSTEM_PROMPT = (
     "판정은 이미 끝났다. 너는 아래 판정 결과를 설명하는 문장만 만들어라. "
     "초과 여부를 스스로 재판단하거나 임의로 수치를 언급하지 마라. "
-    "근거는 아래 조문 발췌에서만 인용한다."
+    "근거는 아래 조문 발췌에서만 인용한다. "
+    "반드시 한 문장, 40자 이내로 결과와 핵심 근거만 짧게 말하고, 절차 안내나 배경 설명은 덧붙이지 마라."
 )
 
 
@@ -154,7 +168,7 @@ def _build_user_prompt(
         f"시설/기준: {facility_name}\n"
         f"판정 결과: {_status_label(exceeds_limit)}\n"
         f"근거 조문 발췌:\n{citation_text}\n\n"
-        "위 판정 결과를 그대로 설명하는 한국어 문장을 1~2개로 작성하라."
+        "위 판정 결과만 한 문장(40자 이내)으로 간결하게 설명하라. 부연 설명 금지."
     )
 
 
@@ -173,7 +187,9 @@ def llm_summarize_node(state: ComplianceState) -> Dict[str, Any]:
 
     try:
         final_message = call_llm(
-            _LLM_SYSTEM_PROMPT, _build_user_prompt(facility_name, exceeds_limit, citations)
+            _LLM_SYSTEM_PROMPT,
+            _build_user_prompt(facility_name, exceeds_limit, citations),
+            max_tokens=100,  # 프롬프트의 "40자 이내" 지시를 모델이 안 지켜도 장황해지지 않게 하드 캡
         )
     except Exception:
         logger.warning("llm_summarize_node: LLM 호출 실패, 폴백 문구로 대체", exc_info=True)

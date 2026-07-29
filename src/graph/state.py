@@ -41,6 +41,11 @@ class ComplianceState(TypedDict, total=False):
     # authority_verify_node 또는 plain_compute_node가 채움
     computation_result: Optional[Dict[str, Any]]
 
+    # authority_verify_node 전용 — 이 (facility_id, regulation_theme) 조합의 누적 질의
+    # 횟수(순수 카운터, Z값과 무관). traced_node가 Langfuse span에 그대로 노출해 질의예산
+    # 소진 추이를 모니터링하는 데 쓴다 (src/security/query_budget.py, docs/oracle_defense.md).
+    he_query_count: Optional[int]
+
     # rag_check_node가 채움 — src/db 구조화 기준값과의 정확값 대조 결과
     rag_verdict: Optional[Dict[str, Any]]
 

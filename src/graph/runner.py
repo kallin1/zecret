@@ -122,7 +122,7 @@ class BatchDemoResult:
     facility_name: str
     exceeds_limit_by_theme: Dict[str, bool]
     latency_ms: float
-    ciphertext_preview: Optional[Dict[str, Any]]
+    token_preview: Optional[Dict[str, Any]]
 
 
 def compute_he_batch_demo(zone: config.MilitaryZone, plan_height_plain: float) -> Optional[BatchDemoResult]:
@@ -145,7 +145,7 @@ def compute_he_batch_demo(zone: config.MilitaryZone, plan_height_plain: float) -
         facility_name=zone.name,
         exceeds_limit_by_theme=dict(zip(theme_ids, exceeds_list)),
         latency_ms=latency_ms,
-        ciphertext_preview=describe_ciphertext_for_display(zone.facility_id, "__batch__"),
+        token_preview=describe_ciphertext_for_display(zone.facility_id, "__batch__"),
     )
 
 

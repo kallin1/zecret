@@ -6,9 +6,12 @@
 # 매 테스트마다 CLOVASTUDIO_API_KEY를 지워주므로, 아래 report 계산은
 # 항상 실제 네트워크 호출 없이 폴백 경로로 빠르게 끝난다).
 
+import json
+
 import pytest
 
 import src.agent.router as router
+from src.compliance.search import find_nearby_restricted_zones, summarize_nearby
 from src.graph.runner import run_full_compliance_check
 
 # 서울공항 제한보호구역(반경 5km)·남한산성 국가유산(반경 1km)이 겹치는 데모 좌표.
@@ -25,6 +28,12 @@ def default_report():
 def military_violation_report():
     """군사시설도 위반으로 바뀌는 높이(두 규정 테마 기준 45.0m/60.0m를 모두 초과)."""
     return run_full_compliance_check(DEFAULT_X, DEFAULT_Y, 65.0, 3.0)
+
+
+@pytest.fixture
+def default_nearby_summary():
+    """기본 데모 좌표 기준 반경검색 결과 — 국가유산·군사시설이 모두 반경 내에 있다."""
+    return summarize_nearby(find_nearby_restricted_zones(DEFAULT_X, DEFAULT_Y))
 
 
 def test_fallback_used_when_no_api_key(default_report):
@@ -46,6 +55,30 @@ def test_llm_output_used_verbatim_on_success(monkeypatch, default_report):
     monkeypatch.setattr(router, "call_llm", lambda system_prompt, user_prompt: "LLM이 만든 답변입니다.")
     answer = router.handle_agent_query("설명해줘", default_report)
     assert answer == "LLM이 만든 답변입니다."
+
+
+def test_grounding_context_includes_nearby_summary_counts(default_report, default_nearby_summary):
+    """근처 시설 여부를 챗봇이 '모릅니다'로 답하지 않으려면, 반경검색 결과(개수·시설명·거리)가
+    그라운딩 컨텍스트에 명시적으로 들어가야 한다."""
+    context = router._build_grounding_context(default_report, default_nearby_summary)
+
+    assert "반경 검색 결과" in context
+    assert "군사시설 1건" in context
+    assert "국가유산 1건" in context
+    assert "서울공항" in context
+
+
+def test_grounding_context_reports_no_nearby_facilities_when_absent():
+    """반경 내 시설이 없는 경우에도 '모른다'가 아니라 '없다'는 사실을 명확히 답할 근거를 담는다."""
+    empty_summary = {"exists": False, "heritage_count": 0, "military_count": 0, "facilities": []}
+    context = router._build_grounding_context([], empty_summary)
+    assert "없음" in context
+
+
+def test_grounding_context_handles_missing_nearby_summary(default_report):
+    """nearby_summary를 안 넘기는 기존 호출부(하위 호환)도 에러 없이 동작해야 한다."""
+    context = router._build_grounding_context(default_report)
+    assert "반경 검색 결과" in context
 
 
 def test_grounding_context_contains_judgment_citations_and_margin_except_military(default_report):
@@ -157,3 +190,80 @@ def test_grounding_context_includes_facility_id_for_tool_calls(default_report):
     context = router._build_grounding_context(default_report)
     assert "facility_id=sunlight_setback_general" in context
     assert "facility_id=military_seongnam_airport" in context
+
+
+# --- 챗봇 자체의 Langfuse 계측 ("langfuse에 검색 자체도 로그에 안 잡힘" 요청 대응) ---
+# 그래프 노드(traced_node)와 별개로, handle_agent_query()도 "agent_chat" span 하나로
+# 기록되어야 한다 — 질문/답변 원문은 남기지 않고 facility_ids/stage/latency_ms/
+# question_length만 allowlist로 남긴다.
+
+
+# OpenTelemetry 배치 프로세서가 flush() 이후에도 이전 테스트의 span을 뒤늦게 내보내는
+# 경우가 있어(tests/test_langfuse_tracing.py와 동일한 이유), client/exporter를 세션
+# 범위로 하나만 만들고 매 테스트 전에 clear()만 한다 — 테스트마다 새로 만들면 그 사이에
+# 남은 span이 다음 테스트의 flush에 섞여 나올 수 있다.
+@pytest.fixture(scope="session")
+def _shared_chat_langfuse_exporter():
+    from langfuse import Langfuse
+    from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+    exporter = InMemorySpanExporter()
+    client = Langfuse(
+        public_key="pk-test-router", secret_key="sk-test-router", host="http://localhost:1", span_exporter=exporter
+    )
+    return client, exporter
+
+
+@pytest.fixture
+def captured_chat_spans(_shared_chat_langfuse_exporter):
+    from src.graph.tracing import set_langfuse_client
+
+    client, exporter = _shared_chat_langfuse_exporter
+    exporter.clear()
+    set_langfuse_client(client)
+    try:
+        yield client, exporter
+    finally:
+        set_langfuse_client(None)
+
+
+def test_agent_chat_creates_langfuse_span_with_allowlisted_fields_only(
+    monkeypatch, default_report, captured_chat_spans
+):
+    client, exporter = captured_chat_spans
+    monkeypatch.setattr(
+        router, "call_llm", lambda system_prompt, user_prompt: "민감한 답변 원문이 여기 들어갑니다."
+    )
+
+    def _tool_calling_unavailable(*a, **k):
+        raise RuntimeError("no key configured")
+
+    monkeypatch.setattr(router, "call_llm_with_tools", _tool_calling_unavailable)
+
+    router.handle_agent_query("이 질문 원문은 span에 남으면 안 된다", default_report)
+    client.flush()
+
+    spans = [s for s in exporter.get_finished_spans() if s.name == "agent_chat"]
+    assert len(spans) == 1
+    output = json.loads(spans[0].attributes["langfuse.observation.output"])
+
+    assert set(output.keys()) == {"facility_ids", "question_length", "stage", "latency_ms"}
+    assert output["stage"] == "single_call"  # tool-calling 실패 → 단발 call_llm으로 대체됨
+    assert output["question_length"] == len("이 질문 원문은 span에 남으면 안 된다")
+    assert "sunlight_setback_general" in output["facility_ids"]
+
+    blob = json.dumps({k: str(v) for k, v in spans[0].attributes.items()}, ensure_ascii=False)
+    assert "이 질문 원문은 span에 남으면 안 된다" not in blob
+    assert "민감한 답변 원문이 여기 들어갑니다" not in blob
+
+
+def test_agent_chat_span_records_tool_calling_stage_on_success(monkeypatch, default_report, captured_chat_spans):
+    client, exporter = captured_chat_spans
+    monkeypatch.setattr(router, "call_llm_with_tools", lambda *a, **k: "tool-calling 답변")
+
+    router.handle_agent_query("정확히 어떤 조문을 위반했어?", default_report)
+    client.flush()
+
+    spans = [s for s in exporter.get_finished_spans() if s.name == "agent_chat"]
+    output = json.loads(spans[0].attributes["langfuse.observation.output"])
+    assert output["stage"] == "tool_calling"

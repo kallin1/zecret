@@ -73,12 +73,21 @@
 
 ## ✅ 체크포인트 대응
 
+원 체크포인트 문구는 "민감 좌표(X, Y)를 CKKS로 암호화"를 전제로 하지만, ZeCret은
+**좌표는 평문으로 두고 높이(Z)만 암호화**하는 쪽으로 재해석했다 — 서울공항·남한산성의
+위치는 이미 공개된 정보이고, 안보상 비공개인 것은 그 구역의 고도제한 수치뿐이기
+때문이다(`CLAUDE.md` 원칙 3). 이 재해석의 상세 근거와 체크포인트별 1:1 대응은
+[`docs/checkpoint_mapping.md`](docs/checkpoint_mapping.md)에 정리했다.
+
 | 체크포인트 | 적용 방식 |
 |---|---|
 | ① 암호화 저장 | 군사시설 높이제한 기준값을 `HeightLimitCiphertext`(실제 TenSEAL CKKS 암호문, `src/he/encryption.py`)로 감싸 둠. 암호화는 관리기관 역할의 오프라인 스크립트(`scripts/generate_mock_ciphertexts.py`)가 미리 수행해 암호문 캐시(`src/db/ciphertext_cache.py`)에 저장하고, 서비스는 조회만 함 — 비밀키는 `scripts/keys/`에만 있고 서비스 코드(`src/`, `app.py`)는 이를 import하지 않음. LangGraph 경로에서는 `he_compute_node`(공개 컨텍스트로 실제 동형 뺄셈)와 `authority_verify_node`(`scripts/mock_authority_verify.py` 호출 — 관리기관 HSM 자리)가 이 분리를 그대로 구현함 |
-| ② 범위검색 | 계획 위치 기준 반경(`ADJACENCY_RADIUS_M`) 내 인접 국가유산/군사시설만 판정 대상으로 검색 |
+| ② 범위검색 | 계획 위치 기준 반경(`ADJACENCY_RADIUS_M`) 내 인접 국가유산/군사시설만 판정 대상으로 검색 — 검색 대상인 좌표는 공개 정보이므로 평문 반경검색으로 수행하고, 그렇게 추려진 시설에 대해서만 비공개 대상(Z)을 동형암호로 비교함 |
 | ③ 시각화 대안 | 관제센터형 대시보드에서 모든 카테고리가 위반/적합 이진 결과만 표시 (정밀 수치 UI 요소 자체를 렌더링하지 않음). 지도에는 계획 건물 위치 1개만 마커로 표시하고, 인접 국가유산/군사시설 위치는 지도에 올리지 않음 |
-| ④ 토큰 참조값 | `HE:datasetId:buildingIndex` 형식 유틸(`src/tokens.py`)은 보유하고 있으나, 이번 반전된 흐름(고정 참조 데이터 비교)에는 아직 연결되어 있지 않음 — 다음 단계 검토 대상 |
+| ④ 토큰 참조값 | `HE:{facility_id}:{regulation_theme}` 형식 토큰(`src/tokens.py::issue_token`)을 실제 반환 경로(`src/db/ciphertext_cache.py::describe_ciphertext_for_display`)에 연결함 — "🔬 이 항목의 참조 토큰 확인" 패널은 더 이상 ciphertext hex/바이트 길이를 노출하지 않고 참조 토큰만 표시 |
+
+체크포인트를 만족해도 남는 잔여 위험(반복 질의로 인한 Z값 역산 가능성)과 그 대응은
+[`docs/oracle_defense.md`](docs/oracle_defense.md)에서 별도로 다룬다.
 
 ---
 
@@ -94,8 +103,8 @@
 - 🗄️ **구조화 기준값 DB** (`src/db`, SQLite) — facility_id 기반 정확 쿼리로 판정 결과를 재검증 (벡터 검색 아님), 군사시설 행은 height_limit_m을 조회 결과에 포함하지 않음
 - 📚 **RAG 벡터DB 근거 인용** (`src/rag`, ChromaDB) — 건축법·문화재보호법·군사기지법 조문 청크를 facility_id로 정확 조회해 "왜 이 기준이 적용되는지" 근거 문장을 제공. 판정에는 관여하지 않으며, 개정으로 대체된(`superseded_by`) 구버전 조문은 검색에서 제외
 - 🗣️ **LLM 판정 설명** (`llm_summarize_node`) — 이미 확정된 판정 결과(bool)와 RAG 근거만으로 설명문을 생성하고, 재판단·임의 수치 언급은 프롬프트로 금지 (CLAUDE.md 절대 원칙 5). API 키 미설정/호출 실패 시 결정론적 템플릿 문구로 자동 대체되어 파이프라인이 항상 끝까지 실행됨
-- 🔭 **Langfuse 노드별 트레이싱** (`src/graph/tracing.py`) — 각 노드 실행을 span으로 기록하되, 계획 높이·정확한 좌표·암호문 등은 절대 남기지 않고 `facility_id`/`regulation_type`/`latency_ms`/`exceeds_limit`만 allowlist 방식으로 기록
-- 🤖 **AI Agent 채팅 — 실제 tool-calling** (`src/agent`) — 화면 하단 "LLM 질의응답" 채팅창에서 판정 결과에 대해 자유 질문 가능. `CLOVASTUDIO_API_KEY`가 있으면 `call_llm_with_tools()`가 네이버클라우드 CLOVA Studio(HyperCLOVA X)의 실제 function-calling 루프를 돌려, "정확히 어떤 조문을 위반했나" 같은 질문에는 LLM이 스스로 `tool_get_violation_citations(facility_id, regulation_theme)`를 호출해 RAG 조문 원문만 근거로 답한다 — 그래프를 재실행하는 `tool_check_height_compliance`는 채팅 tool 목록에서 의도적으로 제외해, 채팅 질문마다 판정이 다시 계산되지 않는다(CLAUDE.md 절대 원칙 5). 키 미설정/tool-calling 실패 시 (1)report+RAG 근거를 프롬프트에 채우는 단발 `call_llm()` 호출 → (2)그것도 실패하면 키워드 기반 규칙 답변, 3단계로 폴백
+- 🔭 **Langfuse 노드별 트레이싱** (`src/graph/tracing.py`) — 각 노드 실행을 span으로 기록하되, 계획 높이·정확한 좌표·암호문 등은 절대 남기지 않고 `facility_id`/`regulation_type`/`latency_ms`/`exceeds_limit`만 allowlist 방식으로 기록. `authority_verify` span에는 질의예산 카운터(`query_count`)도 함께 실려, 반복 질의 오라클 방어(아래 리스크 표, [`docs/oracle_defense.md`](docs/oracle_defense.md))의 모니터링 지점으로 쓴다 — 예산 초과 시에는 span이 `ERROR`로 마킹되고 `query_count`/`query_budget`이 구조화된 필드로 남아 정상 판정과 구분해 필터링할 수 있음. AI Agent 채팅(`handle_agent_query`)도 `agent_chat`이라는 별도 span으로 기록되는데, 그래프 노드와 달리 질문/답변 원문은 남기지 않고 `facility_ids`/`stage`(tool_calling·single_call·rule_based 중 실제 쓰인 폴백 단계)/`latency_ms`/`question_length`만 남김
+- 🤖 **AI Agent 채팅 — 실제 tool-calling** (`src/agent`) — 화면 하단 "LLM 질의응답" 채팅창에서 판정 결과에 대해 자유 질문 가능. 그라운딩 컨텍스트에는 판정 결과(위반/적합·규정 테마별 margin)뿐 아니라 반경검색 결과(`src.compliance.search.summarize_nearby`, 인접 시설 존재 여부·개수·거리)도 함께 담겨, "근처에 이런 시설 있어?" 류 질문에도 "모른다"가 아니라 명확히 답한다. 상담 창구처럼 정중한 존댓말로 답하고, 계산된 수치가 있으면 얼버무리지 않고 결론·필요 조치까지 명시하도록 프롬프트에 강제한다. 군사시설의 실제 기준값·margin은 정확한 수치·범위·예/아니오 비교·가정형 질문 등 어떤 형태로 캐물어도 절대 추측하지 않고 사유를 밝혀 거절하도록 프롬프트에 명시(위반/적합 여부 자체는 군사시설도 항상 공개). `CLOVASTUDIO_API_KEY`가 있으면 `call_llm_with_tools()`가 네이버클라우드 CLOVA Studio(HyperCLOVA X)의 실제 function-calling 루프를 돌려, "정확히 어떤 조문을 위반했나" 같은 질문에는 LLM이 스스로 `tool_get_violation_citations(facility_id, regulation_theme)`를 호출해 RAG 조문 원문만 근거로 답한다 — 그래프를 재실행하는 `tool_check_height_compliance`는 채팅 tool 목록에서 의도적으로 제외해, 채팅 질문마다 판정이 다시 계산되지 않는다(CLAUDE.md 절대 원칙 5). 키 미설정/tool-calling 실패 시 (1)report+RAG 근거를 프롬프트에 채우는 단발 `call_llm()` 호출 → (2)그것도 실패하면 키워드 기반 규칙 답변, 3단계로 폴백
 
 ---
 
@@ -108,6 +117,7 @@
 | [`docs/architecture.md`](docs/architecture.md) | 컴포넌트 다이어그램 — app.py/src 계층별 책임과 신뢰 경계(비밀키가 어디에도 서비스 코드에 없다는 것) |
 | [`docs/sequence.md`](docs/sequence.md) | 시퀀스 다이어그램 — (1) 검색→반경조회→다중 테마 판정→지도 렌더링, (2) 챗봇 tool-calling |
 | [`docs/langgraph.md`](docs/langgraph.md) | `graph.get_graph().draw_mermaid()`로 실제 컴파일된 그래프에서 직접 추출한 LangGraph 구조 |
+| [`docs/architecture_simplified.drawio`](docs/architecture_simplified.drawio) | 시스템/인프라 아키텍처를 핵심 구성요소만 남겨 간소화한 draw.io 파일 (2개 탭, 아이콘 포함) — [diagrams.net](https://app.diagrams.net)에서 열람·편집 |
 
 ---
 
@@ -162,7 +172,7 @@ python scripts/generate_mock_ciphertexts.py
 streamlit run app.py
 ```
 
-테스트 실행 (3개 판정 카테고리 스키마 검증, 군사시설 카테고리 정밀 수치 비노출 검증, RAG facility_id 조회, LLM 노드의 판정 불변성, Langfuse span redaction, 실제 TenSEAL 연산 결과가 Phase 5 baseline과 일치하는지 등). `tests/conftest.py`가 세션 시작 시 위 사전 준비 스크립트를 자동으로(이미 되어 있으면 건너뜀) 실행하므로 수동 실행 없이도 바로 돌아간다:
+테스트 실행 (3개 판정 카테고리 스키마 검증, 군사시설 카테고리 정밀 수치 비노출 검증, RAG facility_id 조회, LLM 노드의 판정 불변성, Langfuse span redaction, 실제 TenSEAL 연산 결과가 Phase 5 baseline과 일치하는지, 반복 질의 오라클 방어(질의예산) 등). `tests/conftest.py`가 세션 시작 시 위 사전 준비 스크립트를 자동으로(이미 되어 있으면 건너뜀) 실행하므로 수동 실행 없이도 바로 돌아간다:
 
 ```bash
 pytest
@@ -195,6 +205,7 @@ LANGFUSE_HOST=https://cloud.langfuse.com
 AWS_ACCESS_KEY_ID=your_aws_key
 AWS_SECRET_ACCESS_KEY=your_aws_secret
 VWORLD_API_KEY=your_vworld_api_key             # 없으면 지도가 라벨 없는 기본 dark 스타일로 폴백 (실제 건물 표시 안 됨)
+HE_QUERY_BUDGET_PER_REGULATION=50              # (facility_id, regulation_theme) 조합당 누적 질의 한도 — docs/oracle_defense.md 참고
 ```
 
 > ChromaDB(`src/rag`)는 최초 색인 시 로컬 임베딩 모델(all-MiniLM-L6-v2, ~80MB)을 한 번 내려받습니다 — 최초 실행 시에만 인터넷 연결이 필요하고, 이후에는 로컬 캐시를 사용합니다.
@@ -241,6 +252,7 @@ VWORLD_API_KEY=your_vworld_api_key             # 없으면 지도가 라벨 없�
 | 2주 내 다기능 구현 부담 | 판정 로직 3종 + UI 우선 구현 후 HE 실연산·AI Agent·RAG 순차 추가 |
 | LLM API 키 부재/장애 시 설명문 생성 중단 | `llm_summarize_node`가 결정론적 템플릿 문구로 자동 대체 — 판정 결과(exceeds_limit) 자체는 이 노드가 절대 바꾸지 않으므로 폴백 상태에서도 파이프라인이 끝까지 실행됨 |
 | 법령 원문(고시) 미확보 | 실 고시 원문 연동 전까지 공개 조문을 데모용으로 재구성한 텍스트를 `src/rag`에 색인, 군사시설 조문은 수치 없이 "비공개"라는 사실만 서술 |
+| Z값 자체는 암호화해도, 판정 결과(bool)를 반복 질의하면 이진탐색으로 Z를 역산할 수 있음 (비교 결과 1비트 오라클의 근본적 한계 — 어떤 암호 스킴을 쓰든 못 막는 질의 인터페이스의 성질) | `authority_verify_node`가 복호화 직전 `(facility_id, regulation_theme)` 조합의 누적 질의 횟수에 하드 캡을 걸고(`src/security/query_budget.py`), 넘으면 `exceeds_limit`을 지어내지 않고 판정을 거부함 — 근거·관련 연구(Dinur–Nissim reconstruction theorem, Sparse Vector Technique)와 잔여 한계는 [`docs/oracle_defense.md`](docs/oracle_defense.md) 참고 |
 
 ---
 

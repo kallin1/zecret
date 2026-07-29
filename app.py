@@ -32,6 +32,7 @@ from src.db.ciphertext_cache import describe_ciphertext_for_display
 from src.geo.buildings import fetch_nearby_building_footprints, to_building_layer_data
 from src.geo.risk_grid import build_risk_grid
 from src.graph.runner import compute_he_batch_demo, run_full_compliance_check
+from src.security.query_budget import QueryBudgetExceededError
 
 load_dotenv()
 
@@ -179,11 +180,20 @@ if submitted:
     if any(value is None for value in search_inputs):
         st.sidebar.error("경도·위도·계획 높이·이격거리를 모두 입력해주세요.")
     else:
-        st.session_state.searched_inputs = search_inputs
         # 반경 검색(요청 기능 1) — 존재 여부/개수만 조회, 높이(Z)는 이 호출에 전혀 등장하지 않는다.
-        st.session_state.nearby_summary = summarize_nearby(find_nearby_restricted_zones(plan_x_plain, plan_y_plain))
-        st.session_state.report = run_full_compliance_check(*search_inputs)
-        st.session_state.chat_history = []  # 새 건물을 검색하면 이전 대화는 비운다
+        nearby_summary = summarize_nearby(find_nearby_restricted_zones(plan_x_plain, plan_y_plain))
+        try:
+            report_result = run_full_compliance_check(*search_inputs)
+        except QueryBudgetExceededError as exc:
+            # 반복 질의로 Z값을 역산하려는 시도를 막기 위한 하드캡(src/security/query_budget.py,
+            # docs/oracle_defense.md) — 이전 검색 결과(searched_inputs/report)는 그대로 남겨
+            # 화면이 갑자기 비지 않게 하고, 이번 요청만 거부한다.
+            st.sidebar.error(str(exc))
+        else:
+            st.session_state.searched_inputs = search_inputs
+            st.session_state.nearby_summary = nearby_summary
+            st.session_state.report = report_result
+            st.session_state.chat_history = []  # 새 건물을 검색하면 이전 대화는 비운다
 
 report = st.session_state.report
 searched_inputs = st.session_state.searched_inputs
@@ -315,8 +325,6 @@ with map_col:
             map_style="dark_no_labels",
         )
     st.pydeck_chart(deck)
-    if searched_inputs is None:
-        st.caption("검색 전 기본 위치입니다. 좌측에서 검색하면 계획 건물 위치로 갱신됩니다.")
     if not VWORLD_API_KEY:
         st.caption("VWORLD_API_KEY 미설정 — 실제 건물이 보이는 배경지도를 쓰려면 .env에 키를 추가하세요.")
     st.caption("인접 국가유산/군사시설은 정확한 위치 대신 격자 단위 위험도로만 표시합니다.")
@@ -355,34 +363,19 @@ with status_col:
                     f'<span class="zc-badge {badge_class}">{badge_text}</span></div>',
                     unsafe_allow_html=True,
                 )
-                if is_he:
-                    st.markdown(
-                        f'<div class="zc-row-note">🔒 암호문(Z) − 평문(계획높이) 동형 뺄셈 → 관리기관 HSM이 '
-                        f"부호만 복호화해 반환 (margin/원본 기준값 없음)</div>",
-                        unsafe_allow_html=True,
-                    )
                 st.markdown(
                     f'<div class="zc-row-note">{html.escape(item.final_message)}</div>',
                     unsafe_allow_html=True,
                 )
                 if is_he:
-                    with st.expander("🔬 이 항목의 실제 암호문 확인"):
+                    with st.expander("🔬 이 항목의 참조 토큰 확인"):
                         cipher_info = describe_ciphertext_for_display(item.facility_id, item.regulation_theme)
                         if cipher_info:
-                            st.code(cipher_info["hex_preview"] + " …", language=None)
-                            st.caption(
-                                f"전체 {cipher_info['byte_length']:,} bytes 중 앞 48바이트만 표시 "
-                                f"(he_context_version={cipher_info['he_context_version']}) — "
-                                "이 bytes를 아무리 들여다봐도 원본 높이제한값을 복원할 수 없습니다."
-                            )
+                            st.code(cipher_info["token"], language=None)
                         else:
                             st.caption("암호문 캐시를 찾을 수 없습니다.")
                         if item.he_latency_ms is not None:
-                            st.caption(
-                                f"⏱ 이번 요청의 실측 소요시간: he_compute+authority_verify 약 "
-                                f"{item.he_latency_ms:.2f}ms (같은 판정을 평문으로 계산했다면 "
-                                "0.01ms 미만 — 상세 벤치마크는 docs/benchmark_phase7.json 참고)"
-                            )
+                            st.caption(f"⏱ {item.he_latency_ms:.2f}ms")
 
 if report and searched_inputs is not None:
     military_facility_ids = {item.facility_id for item in report if item.facility_type == "military"}
@@ -400,11 +393,6 @@ if report and searched_inputs is not None:
             continue
         st.write("")
         st.markdown('<div class="zc-panel-title">▌ ⚡ CKKS 배치 연산(SIMD) 데모</div>', unsafe_allow_html=True)
-        st.caption(
-            f"{zone.name}의 규정 테마 {len(batch_demo.exceeds_limit_by_theme)}개를 슬롯 여러 개짜리 "
-            "CKKS 벡터 하나로 묶어, 동형 뺄셈 1회 + HSM 복호화 1회로 전부 판정합니다 — "
-            "위 개별 판정과 같은 결과가 나오는지 직접 비교해보세요."
-        )
         theme_label_by_id = {r.theme_id: r.label for r in zone.regulations}
         for theme_id, exceeds in batch_demo.exceeds_limit_by_theme.items():
             st.markdown(
@@ -417,13 +405,9 @@ if report and searched_inputs is not None:
                 f"⏱ 개별 연산 {len(batch_demo.exceeds_limit_by_theme)}회 합산 약 {individual_total_ms:.2f}ms  "
                 f"vs  배치 연산 1회 약 {batch_demo.latency_ms:.2f}ms"
             )
-        if batch_demo.ciphertext_preview:
-            with st.expander("🔬 배치 암호문 확인"):
-                st.code(batch_demo.ciphertext_preview["hex_preview"] + " …", language=None)
-                st.caption(
-                    f"전체 {batch_demo.ciphertext_preview['byte_length']:,} bytes — 슬롯 "
-                    f"{len(batch_demo.exceeds_limit_by_theme)}개 값이 이 암호문 하나 안에 함께 들어있습니다."
-                )
+        if batch_demo.token_preview:
+            with st.expander("🔬 배치 참조 토큰 확인"):
+                st.code(batch_demo.token_preview["token"], language=None)
 
 st.write("")
 st.markdown('<div class="zc-panel-title">▌ LLM 질의응답</div>', unsafe_allow_html=True)
@@ -434,7 +418,7 @@ if user_question:
     if report is None:
         answer = "먼저 좌측 제어반(Control Panel)에서 🔍 검색을 실행해주세요."
     else:
-        answer = handle_agent_query(user_question, report)
+        answer = handle_agent_query(user_question, report, nearby_summary)
     st.session_state.chat_history.append({"role": "assistant", "content": answer})
 
 if not st.session_state.chat_history:

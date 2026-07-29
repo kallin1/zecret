@@ -13,6 +13,7 @@ from langfuse import Langfuse
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 from src.graph.tracing import set_langfuse_client, traced_node
+from src.security.query_budget import QueryBudgetExceededError
 
 
 class _CapturedSpans:
@@ -116,6 +117,44 @@ def test_node_return_value_unaffected_by_tracing(captured_spans):
     wrapped = traced_node(_dummy_node, "he_compute")
     result = wrapped(_SENSITIVE_STATE)
     assert result == {"computation_result": {"exceeds_limit": True, "margin": None}}
+
+
+def test_span_includes_query_count_when_node_reports_it(captured_spans):
+    """authority_verify_node처럼 he_query_count를 반환하는 노드는 span output에도 그대로 실린다."""
+
+    def _node_with_query_count(state):
+        return {"computation_result": {"exceeds_limit": True, "margin": None}, "he_query_count": 7}
+
+    wrapped = traced_node(_node_with_query_count, "authority_verify")
+    wrapped(_SENSITIVE_STATE)
+    # 앞선 테스트(test_node_return_value_unaffected_by_tracing)가 flush()를 호출하지 않아
+    # 그 span이 배치 프로세서에 남아있다가 이번 flush에 함께 밀려나올 수 있다 — [0]이 아니라
+    # 이름으로 골라야 안전하다.
+    span = next(s for s in captured_spans.get_finished_spans() if s.name == "authority_verify")
+    output = json.loads(span.attributes["langfuse.observation.output"])
+
+    assert output["query_count"] == 7
+    assert set(output.keys()) == {"facility_id", "regulation_type", "latency_ms", "exceeds_limit", "query_count"}
+
+
+def test_budget_exceeded_marks_span_error_with_structured_counts(captured_spans):
+    """QueryBudgetExceededError는 span을 ERROR로 마킹하고 query_count/query_budget을 구조화된
+    output으로 남긴다 — Langfuse에서 facility_id/regulation_type으로 필터링해 오라클 probing
+    시도를 다른 정상 판정과 구분해 볼 수 있어야 한다."""
+
+    def _budget_exceeded_node(state):
+        raise QueryBudgetExceededError("military_seongnam_airport", "protect_zone", budget=50, query_count=51)
+
+    wrapped = traced_node(_budget_exceeded_node, "authority_verify")
+    with pytest.raises(QueryBudgetExceededError):
+        wrapped(_SENSITIVE_STATE)
+
+    span = next(s for s in captured_spans.get_finished_spans() if s.name == "authority_verify")
+    assert span.attributes["langfuse.observation.level"] == "ERROR"
+    output = json.loads(span.attributes["langfuse.observation.output"])
+    assert output["query_count"] == 51
+    assert output["query_budget"] == 50
+    assert output["facility_id"] == "military_seongnam_airport"
 
 
 def test_tracing_disabled_when_no_langfuse_client():

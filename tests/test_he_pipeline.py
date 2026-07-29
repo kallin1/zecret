@@ -6,12 +6,12 @@
 
 import ast
 import json
-import struct
 from pathlib import Path
 
 from src.compliance.config import MILITARY_ZONES
 from src.graph.runner import compute_he_batch_demo, run_full_compliance_check
 from src.he.encryption import HeightLimitCiphertext, compute_diff_ciphertext
+from src.tokens import is_valid_token, parse_token
 from tests.he_test_helpers import encrypt_for_test
 
 BASELINE_PATH = Path(__file__).parent.parent / "docs" / "baseline_phase5.json"
@@ -108,21 +108,22 @@ def test_batch_demo_matches_individual_theme_results():
             assert batch_demo.exceeds_limit_by_theme[regulation.theme_id] == individual_item.exceeds_limit
 
 
-def test_batch_demo_ciphertext_preview_has_no_plaintext_numbers():
-    """hex_preview에 원본 평문(45.0, 60.0)의 IEEE-754 raw byte 표현이 그대로 박혀있지 않아야 한다.
+def test_batch_demo_token_preview_exposes_no_ciphertext_bytes():
+    """token_preview는 참조 토큰만 담아야 한다 (CLAUDE.md 절대 원칙 2, 체크포인트 ④).
 
-    CKKS 암호문은 노이즈가 섞인 사실상 랜덤 바이트열이라, 2자리 hex 문자열("45"/"60") 같은
-    임의 substring은 우연히도 자주 등장한다(생일 문제) — 이는 평문 노출과 무관한 우연의 일치라
-    검증 기준이 될 수 없다. 대신 실제로 의미 있는 검사는 "평문 float가 바이트 그대로 새어
-    들어갔는가"이며, 8바이트 패턴이 우연히 매치될 확률은 무시 가능한 수준(2**-64 근처)이다.
+    과거엔 ciphertext_blob의 hex 프리뷰/바이트 길이를 그대로 화면에 노출했었다 — 이 테스트는
+    그 필드들이 다시 부활하지 않는지, 그리고 클라이언트가 받는 값이 원본을 재구성할 수 없는
+    "HE:{facility_id}:{regulation_theme}" 형식의 토큰뿐인지 확인한다.
     """
     zone = MILITARY_ZONES[0]
     batch_demo = compute_he_batch_demo(zone, 50.0)
-    assert batch_demo.ciphertext_preview is not None
-    assert batch_demo.ciphertext_preview["byte_length"] > 0
-    preview_bytes = bytes.fromhex(batch_demo.ciphertext_preview["hex_preview"])
-    assert struct.pack("<d", 45.0) not in preview_bytes
-    assert struct.pack("<d", 60.0) not in preview_bytes
+    assert batch_demo.token_preview is not None
+    assert set(batch_demo.token_preview.keys()) == {"token", "he_context_version"}
+    token = batch_demo.token_preview["token"]
+    assert is_valid_token(token)
+    dataset_id, reference_id = parse_token(token)
+    assert dataset_id == zone.facility_id
+    assert reference_id == "__batch__"
 
 
 def test_batch_demo_returns_none_without_batch_ciphertext():

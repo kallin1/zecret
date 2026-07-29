@@ -31,7 +31,7 @@ def test_fallback_used_when_no_api_key(monkeypatch):
 
 
 def test_fallback_used_when_llm_call_raises(monkeypatch):
-    def _boom(system_prompt, user_prompt):
+    def _boom(system_prompt, user_prompt, **kwargs):
         raise RuntimeError("network unreachable")
 
     monkeypatch.setattr(nodes, "call_llm", _boom)
@@ -40,7 +40,7 @@ def test_fallback_used_when_llm_call_raises(monkeypatch):
 
 
 def test_llm_output_used_verbatim_on_success(monkeypatch):
-    monkeypatch.setattr(nodes, "call_llm", lambda system_prompt, user_prompt: "LLM이 만든 설명문입니다.")
+    monkeypatch.setattr(nodes, "call_llm", lambda system_prompt, user_prompt, **kwargs: "LLM이 만든 설명문입니다.")
     result = nodes.llm_summarize_node(_heritage_state(True, -3.0))
     assert result["final_message"] == "LLM이 만든 설명문입니다."
 
@@ -49,7 +49,7 @@ def test_llm_cannot_change_the_actual_verdict(monkeypatch):
     """LLM이 사실과 반대로 말해도(환각) computation_result 자체는 이 노드가 절대 바꾸지 않는다 —
     llm_summarize_node의 반환 dict에 computation_result 키가 아예 없어야 한다."""
     monkeypatch.setattr(
-        nodes, "call_llm", lambda system_prompt, user_prompt: "사실 이 건물은 적합합니다 (거짓 진술)."
+        nodes, "call_llm", lambda system_prompt, user_prompt, **kwargs: "사실 이 건물은 적합합니다 (거짓 진술)."
     )
     state = _military_state(True)  # 실제로는 위반
     result = nodes.llm_summarize_node(state)

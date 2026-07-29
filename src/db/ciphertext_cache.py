@@ -14,6 +14,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from src.tokens import issue_token
+
 DB_PATH = Path(__file__).parent / "ciphertext_cache.db"
 
 _SCHEMA_SQL = """
@@ -89,18 +91,16 @@ def load_ciphertext(facility_id: str, regulation_theme: str) -> Optional[sqlite3
 
 
 def describe_ciphertext_for_display(facility_id: str, regulation_theme: str) -> Optional[Dict[str, Any]]:
-    """[표시 전용] 화면에서 "이게 진짜 암호문이다"를 보여주기 위한 순수 프레젠테이션 데이터.
+    """[표시 전용] 화면에 노출해도 되는 참조 토큰 데이터.
 
-    ciphertext_blob을 hex로 일부만 잘라 보여주고 전체 바이트 길이를 담을 뿐, 복호화하거나
-    평문을 유추할 수 있는 어떤 연산도 하지 않는다 — 이 함수가 반환하는 값은 원본 Z값과
-    수학적으로 무관한 opaque 데이터의 겉모습(hex 문자열, 길이)뿐이다.
+    ciphertext_blob 자체나 그 바이트(hex/길이 등 파생값 포함)는 절대 반환하지 않는다 —
+    클라이언트는 원본을 재구성할 수 없는 참조 토큰(`HE:{facility_id}:{regulation_theme}`)만
+    받는다 (CLAUDE.md 절대 원칙 2, 체크포인트 ④).
     """
     row = load_ciphertext(facility_id, regulation_theme)
     if row is None:
         return None
-    blob: bytes = row["ciphertext_blob"]
     return {
-        "hex_preview": blob[:48].hex(),
-        "byte_length": len(blob),
+        "token": issue_token(facility_id, regulation_theme),
         "he_context_version": row["he_context_version"],
     }

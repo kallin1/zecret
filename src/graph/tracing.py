@@ -3,11 +3,18 @@
 # 노드 함수 내부 로직과 그래프 구조(노드/엣지)는 전혀 건드리지 않는다 — 그래프 조립
 # 시점(build.py/runner.py)에서 각 노드 콜러블을 traced_node()로 감싸기만 한다.
 #
-# span에는 facility_id, regulation_type, latency_ms, exceeds_limit(bool)만 남긴다.
-# 계획 높이 원본값(plan_height), 정확한 좌표(plan_x/plan_y), 이격거리(setback_distance),
-# 암호문(diff_ciphertext) 등은 이 모듈을 거치는 순간부터 절대 span에 실리지 않는다
+# span에는 facility_id, regulation_type, latency_ms, exceeds_limit(bool), query_count/
+# query_budget(질의예산 카운터, authority_verify_node에서만)만 남긴다. 계획 높이 원본값
+# (plan_height), 정확한 좌표(plan_x/plan_y), 이격거리(setback_distance), 암호문
+# (diff_ciphertext) 등은 이 모듈을 거치는 순간부터 절대 span에 실리지 않는다
 # (CLAUDE.md 절대 원칙 1 — allowlist 방식이라 새 민감 필드가 state에 추가돼도 여기서
 # 명시적으로 추가하지 않는 한 자동으로 새어나가지 않는다).
+#
+# query_count/query_budget은 반복 질의 오라클 방어(src/security/query_budget.py,
+# docs/oracle_defense.md)의 모니터링 지점이다 — QueryBudgetExceededError가 나면 이 span을
+# ERROR로 마킹하고 두 값을 그대로 실어, Langfuse에서 "authority_verify" span을
+# facility_id/regulation_type별로 묶어 예산 소진 추이를 관찰하거나 ERROR 레벨만 걸러
+# 오라클 probing 시도를 식별할 수 있게 한다.
 
 import os
 import time
@@ -17,9 +24,18 @@ from typing import Any, Callable, Dict, Optional
 from dotenv import load_dotenv
 from langfuse import Langfuse
 
+from src.security.query_budget import QueryBudgetExceededError
+
 load_dotenv()
 
-_ALLOWED_OUTPUT_FIELDS = {"facility_id", "regulation_type", "latency_ms", "exceeds_limit"}
+_ALLOWED_OUTPUT_FIELDS = {
+    "facility_id",
+    "regulation_type",
+    "latency_ms",
+    "exceeds_limit",
+    "query_count",
+    "query_budget",
+}
 
 _client: Optional[Langfuse] = None
 _client_initialized = False
@@ -93,6 +109,15 @@ def traced_node(node_fn: Callable[[Dict[str, Any]], Dict[str, Any]], node_name: 
         with client.start_as_current_observation(name=node_name, input=redacted_input) as span:
             try:
                 result = node_fn(state)
+            except QueryBudgetExceededError as exc:
+                # 질의예산 소진 — 일반 예외와 달리 facility_id/regulation_type은 이미
+                # redacted_input에 있으니 그대로, 여기에 query_count/query_budget만 구조화된
+                # 필드로 더해 Langfuse에서 필터/그룹핑할 수 있게 한다 (status_message는
+                # 사람이 읽는 용도, output은 기계적으로 걸러보는 용도).
+                error_output = {**redacted_input, "query_count": exc.query_count, "query_budget": exc.budget}
+                assert set(error_output) <= _ALLOWED_OUTPUT_FIELDS
+                span.update(level="ERROR", status_message=str(exc), output=error_output)
+                raise
             except Exception as exc:
                 span.update(level="ERROR", status_message=str(exc))
                 raise
@@ -102,6 +127,8 @@ def traced_node(node_fn: Callable[[Dict[str, Any]], Dict[str, Any]], node_name: 
                 "latency_ms": latency_ms,
                 "exceeds_limit": _extract_exceeds_limit(result),
             }
+            if "he_query_count" in result:
+                output_fields["query_count"] = result["he_query_count"]
             assert set(output_fields) <= _ALLOWED_OUTPUT_FIELDS
             span.update(output=output_fields)
         return result
