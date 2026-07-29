@@ -6,6 +6,7 @@
 
 import ast
 import json
+import struct
 from pathlib import Path
 
 from src.compliance.config import MILITARY_ZONES
@@ -108,12 +109,20 @@ def test_batch_demo_matches_individual_theme_results():
 
 
 def test_batch_demo_ciphertext_preview_has_no_plaintext_numbers():
+    """hex_preview에 원본 평문(45.0, 60.0)의 IEEE-754 raw byte 표현이 그대로 박혀있지 않아야 한다.
+
+    CKKS 암호문은 노이즈가 섞인 사실상 랜덤 바이트열이라, 2자리 hex 문자열("45"/"60") 같은
+    임의 substring은 우연히도 자주 등장한다(생일 문제) — 이는 평문 노출과 무관한 우연의 일치라
+    검증 기준이 될 수 없다. 대신 실제로 의미 있는 검사는 "평문 float가 바이트 그대로 새어
+    들어갔는가"이며, 8바이트 패턴이 우연히 매치될 확률은 무시 가능한 수준(2**-64 근처)이다.
+    """
     zone = MILITARY_ZONES[0]
     batch_demo = compute_he_batch_demo(zone, 50.0)
     assert batch_demo.ciphertext_preview is not None
     assert batch_demo.ciphertext_preview["byte_length"] > 0
-    assert "45" not in batch_demo.ciphertext_preview["hex_preview"]
-    assert "60" not in batch_demo.ciphertext_preview["hex_preview"]
+    preview_bytes = bytes.fromhex(batch_demo.ciphertext_preview["hex_preview"])
+    assert struct.pack("<d", 45.0) not in preview_bytes
+    assert struct.pack("<d", 60.0) not in preview_bytes
 
 
 def test_batch_demo_returns_none_without_batch_ciphertext():
