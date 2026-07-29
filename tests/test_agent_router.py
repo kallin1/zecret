@@ -11,17 +11,20 @@ import pytest
 import src.agent.router as router
 from src.graph.runner import run_full_compliance_check
 
+# 서울공항 제한보호구역(반경 5km)·남한산성 국가유산(반경 1km)이 겹치는 데모 좌표.
+DEFAULT_X, DEFAULT_Y = 127.1567, 37.4504
+
 
 @pytest.fixture
 def default_report():
     """일조권/국가유산 위반, 군사시설 적합 — 기본 데모 위치."""
-    return run_full_compliance_check(127.125000, 37.126000, 20.0, 3.0)
+    return run_full_compliance_check(DEFAULT_X, DEFAULT_Y, 20.0, 3.0)
 
 
 @pytest.fixture
 def military_violation_report():
-    """군사시설도 위반으로 바뀌는 높이."""
-    return run_full_compliance_check(127.125000, 37.126000, 50.0, 3.0)
+    """군사시설도 위반으로 바뀌는 높이(두 규정 테마 기준 45.0m/60.0m를 모두 초과)."""
+    return run_full_compliance_check(DEFAULT_X, DEFAULT_Y, 65.0, 3.0)
 
 
 def test_fallback_used_when_no_api_key(default_report):
@@ -57,8 +60,8 @@ def test_grounding_context_contains_judgment_citations_and_margin_except_militar
     assert "-7.00m" in context  # 일조권 margin (공개 정보)
     assert "-5.00m" in context  # 국가유산 margin
     assert "비공개" in context  # 군사시설은 margin 대신 비공개 표시
-    assert "127.125" not in context
-    assert "37.126" not in context
+    assert "127.1567" not in context
+    assert "37.4504" not in context
 
 
 def test_fallback_remediation_question_gives_shortfall_amount(default_report):
@@ -107,3 +110,50 @@ def test_router_does_not_import_the_compliance_graph_entrypoint():
     질문마다 run_full_compliance_check를 다시 호출하면 카테고리별 LLM 호출까지 반복되어
     불필요하게 느려진다."""
     assert not hasattr(router, "run_full_compliance_check")
+
+
+# --- 실제 tool-calling 경로 (요청 기능 3) ---
+# conftest.py의 autouse fixture가 매 테스트 전에 ANTHROPIC_API_KEY를 지우므로, 이 경로를
+# 검증하려면 테스트 본문에서 직접 monkeypatch.setenv()로 다시 켜야 한다.
+
+
+def test_tool_calling_used_when_anthropic_key_configured(monkeypatch, default_report):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-dummy")
+    monkeypatch.setattr(router, "call_llm_with_tools", lambda *a, **k: "tool-calling으로 만든 답변")
+    answer = router.handle_agent_query("정확히 어떤 조문을 위반했어?", default_report)
+    assert answer == "tool-calling으로 만든 답변"
+
+
+def test_falls_back_to_plain_call_llm_when_tool_calling_fails(monkeypatch, default_report):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-dummy")
+
+    def _boom(*a, **k):
+        raise RuntimeError("tool-calling unavailable")
+
+    monkeypatch.setattr(router, "call_llm_with_tools", _boom)
+    monkeypatch.setattr(router, "call_llm", lambda system_prompt, user_prompt: "단발 호출 답변")
+    answer = router.handle_agent_query("설명해줘", default_report)
+    assert answer == "단발 호출 답변"
+
+
+def test_execute_tool_returns_real_citations_not_fabricated(default_report):
+    """_execute_tool은 실제 tool_get_violation_citations를 그대로 호출한다 — LLM 없이도
+    이 함수 자체가 판정 근거를 지어내지 않고 RAG 조회 결과만 반환하는지 확인한다."""
+    sunlight_item = next(item for item in default_report if item.facility_type == "sunlight_setback")
+    result = router._execute_tool(
+        "get_violation_citations",
+        {"facility_id": sunlight_item.facility_id, "regulation_theme": sunlight_item.regulation_theme},
+    )
+    assert any("건축법 제61조" in c["text"] for c in result)
+
+
+def test_execute_tool_rejects_unknown_tool_name():
+    with pytest.raises(ValueError):
+        router._execute_tool("some_other_tool", {})
+
+
+def test_grounding_context_includes_facility_id_for_tool_calls(default_report):
+    """LLM이 get_violation_citations를 호출하려면 컨텍스트에 facility_id가 있어야 한다."""
+    context = router._build_grounding_context(default_report)
+    assert "facility_id=sunlight_setback_general" in context
+    assert "facility_id=military_seongnam_airport" in context

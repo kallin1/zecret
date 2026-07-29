@@ -64,9 +64,10 @@
 |---|---|---|---|---|---|
 | 1 | 일조권 사선제한 | 건축법 제61조, 시행령 제86조 | 높이 9m 이하 → 1.5m 이상 이격 / 9m 초과 → 높이의 1/2 이상 이격 | 실제 수치 | 이진 결과만 |
 | 2 | 국가유산 경관보호 | 문화재보호법, 유산별 개별 고시 | 계획 높이가 유산별 허용 높이를 초과하는지 | 실제 수치 | 이진 결과만 |
-| 3 | 군사시설 비행안전구역 고도제한 | 군사기지 및 군사시설 보호법 | 계획 높이가 비공개 높이제한 기준값을 초과하는지 | 항상 `None` | 이진 결과만 |
+| 3-1 | 군사시설 제한보호구역 고도제한 | 군사기지 및 군사시설 보호법 제9조 | 계획 높이가 비공개 높이제한 기준값을 초과하는지 | 항상 `None` | 이진 결과만 |
+| 3-2 | 군사시설 비행안전구역 기본표면 | 군사기지 및 군사시설 보호법 제10조 | 계획 높이가 비공개 기본표면 표고를 초과하는지 | 항상 `None` | 이진 결과만 |
 
-세 카테고리 모두 동일한 반환 스키마를 쓰는 `evaluate_height_compliance(facility_type, plan_height, reference_value) -> dict`(`src/compliance/rules.py`)로 구현되어 있고, 실제 실행은 LangGraph 파이프라인(`src/graph`)의 `plain_compute_node`(일조권/국가유산)·`he_compute_node`+`authority_verify_node`(군사시설) 노드가 담당합니다. Streamlit UI(`app.py`)는 `src/graph/runner.py`의 `run_full_compliance_check()`가 반환한 카테고리별 결과(`CategoryResult`)를 그대로 받아 렌더링만 하며, margin은 1)일조권·2)국가유산 카테고리에서는 데이터 계층(`computation_result`)에 실제 수치가 채워지지만 카테고리와 무관하게 화면에는 전혀 렌더링하지 않고 `exceeds_limit`(위반/적합)만 표시합니다.
+군사시설은 **규정 테마(regulation_theme)** 단위로 독립 판정한다 — 같은 시설(서울공항)이라도 제9조(제한보호구역)와 제10조(비행안전구역)가 중첩 적용되어 서로 다른 비공개 기준값(Z)을 갖고, 계획 높이에 따라 테마별로 위반/적합이 갈릴 수 있다. 세 카테고리 모두 동일한 반환 스키마를 쓰는 `evaluate_height_compliance(facility_type, plan_height, reference_value) -> dict`(`src/compliance/rules.py`)로 구현되어 있고, 실제 실행은 LangGraph 파이프라인(`src/graph`)의 `plain_compute_node`(일조권/국가유산)·`he_compute_node`+`authority_verify_node`(군사시설, 테마마다 1회씩) 노드가 담당합니다. Streamlit UI(`app.py`)는 `src/graph/runner.py`의 `run_full_compliance_check()`가 반환한 카테고리·테마별 결과(`CategoryResult`, `regulation_theme`/`regulation_label` 필드 포함)를 그대로 받아 렌더링만 하며, margin은 1)일조권·2)국가유산 카테고리에서는 데이터 계층(`computation_result`)에 실제 수치가 채워지지만 카테고리와 무관하게 화면에는 전혀 렌더링하지 않고 `exceeds_limit`(위반/적합)만 표시합니다.
 
 ---
 
@@ -86,14 +87,27 @@
 - ⚖️ **3종 높이 컴플라이언스 판정** — 일조권 사선제한 / 국가유산 경관보호 / 군사시설 고도제한
 - 🔒 **군사시설 기준값 비공개 처리 (실제 TenSEAL CKKS)** — 서비스는 비밀키를 보유하지 않으며 암호문-평문 동형 뺄셈까지만 수행, 최종 복호화(부호 비트)는 관리기관 HSM 역할을 대신하는 오프라인 스크립트(`scripts/mock_authority_verify.py`)에서 수행 후 이진 결과만 전달
 - 🔑 **Mock 관리기관 사전 준비** (`scripts/generate_mock_ciphertexts.py`) — CKKS 키 쌍 생성, 샘플 군사시설 Z값을 공개키로 암호화해 암호문 캐시에 저장. 비밀키는 `scripts/keys/`에만 저장되고 서비스 코드는 이를 절대 import하지 않음
-- 🔍 **인접 판정 대상 자동 검색** — 계획 위치 기준 반경 내 국가유산/군사시설만 자동 조회
-- 🖥️ **관제센터형 대시보드 UI** — 판정 현황 요약(항목 수·위반·적합), 카테고리별 이진 결과 패널, 계획 건물 위치만 표시하는 지도로 구성. 좌측 제어반은 폼(form) 형태라 4개 값을 입력한 뒤 "🔍 검색" 버튼을 눌러야 판정이 실행되며(입력마다 자동 재계산되지 않음), 지도·판정 현황·LLM 질의응답 3개 패널은 검색 여부와 무관하게 항상 화면에 떠 있음(검색 전에는 기본 위치/안내 문구만 표시)
+- 🔍 **반경 검색** (`src/compliance/search.py::find_nearby_restricted_zones`) — 계획 위치 기준 반경 내 국가유산/군사시설의 존재 여부·개수·거리를 조회. 국가유산은 `ADJACENCY_RADIUS_M`(1km), 군사시설은 시설 유형별 반경(`ZONE_RADIUS_BY_SUBTYPE`, 군사기지법 제5조 지정범위 근거 — 서울공항 같은 전술항공작전기지는 5km)을 각각 적용. 좌표(X,Y)는 CLAUDE.md 원칙 3에 따라 평문 취급 대상이라 시설명·거리까지 반환하지만 높이(Z)는 어디에도 등장하지 않음 — 화면 4번째 stat tile("반경 내 시설")과 AI Agent tool(`tool_search_nearby_restricted_zones`)이 이 결과를 그대로 씀
+- 🖥️ **관제센터형 대시보드 UI** — 판정 현황 요약(항목 수·위반·적합·반경 내 시설), 카테고리·규정 테마별 이진 결과 패널(군사시설은 제9조/제10조 배지가 별도로 표시됨), 계획 건물 위치를 표시하는 지도로 구성. 좌측 제어반은 폼(form) 형태라 4개 값을 입력한 뒤 "🔍 검색" 버튼을 눌러야 판정이 실행되며(입력마다 자동 재계산되지 않음), 지도·판정 현황·LLM 질의응답 3개 패널은 검색 여부와 무관하게 항상 화면에 떠 있음(검색 전에는 기본 위치/안내 문구만 표시)
+- 🗺️ **지도 시각화** (`src/geo`) — 계획 건물 위치 마커, 검색 반경 원(테두리만), **격자 단위 위험도**(`geo/risk_grid.py` — 반경을 셀로 나눠 겹치는 인접 시설 개수만 색으로 표시, 개별 시설의 정밀 위치/형태는 그리지 않음, CLAUDE.md 원칙 4), VWorld 건물통합정보(WFS)로 가져온 실제 성남시 건물 footprint를 2.5D로 압출한 배경(`geo/buildings.py`, 판정과 무관한 순수 배경 — 높이 속성이 없으면 지어내지 않고 평면 폴백). VWorld 3D Tiles 공개 API는 보안 규정으로 폐쇄되어 있어 2D footprint 압출 방식을 택함
 - 🕸️ **LangGraph 판정 파이프라인** (`src/graph`) — 군사시설은 `he_compute_node`(실제 CKKS 동형 뺄셈) → `authority_verify_node`(`scripts/mock_authority_verify.py` 호출), 그 외 카테고리는 `plain_compute_node` → 공통으로 `rag_check_node`(구조화 DB 정확 대조) → `llm_summarize_node`(판정 결과 설명문 생성) 순으로 실행. Streamlit 대시보드(`app.py`)는 `src/graph/runner.py`를 통해 이 그래프를 카테고리별로 직접 실행한 결과만 받아 렌더링함
 - 🗄️ **구조화 기준값 DB** (`src/db`, SQLite) — facility_id 기반 정확 쿼리로 판정 결과를 재검증 (벡터 검색 아님), 군사시설 행은 height_limit_m을 조회 결과에 포함하지 않음
 - 📚 **RAG 벡터DB 근거 인용** (`src/rag`, ChromaDB) — 건축법·문화재보호법·군사기지법 조문 청크를 facility_id로 정확 조회해 "왜 이 기준이 적용되는지" 근거 문장을 제공. 판정에는 관여하지 않으며, 개정으로 대체된(`superseded_by`) 구버전 조문은 검색에서 제외
 - 🗣️ **LLM 판정 설명** (`llm_summarize_node`) — 이미 확정된 판정 결과(bool)와 RAG 근거만으로 설명문을 생성하고, 재판단·임의 수치 언급은 프롬프트로 금지 (CLAUDE.md 절대 원칙 5). API 키 미설정/호출 실패 시 결정론적 템플릿 문구로 자동 대체되어 파이프라인이 항상 끝까지 실행됨
 - 🔭 **Langfuse 노드별 트레이싱** (`src/graph/tracing.py`) — 각 노드 실행을 span으로 기록하되, 계획 높이·정확한 좌표·암호문 등은 절대 남기지 않고 `facility_id`/`regulation_type`/`latency_ms`/`exceeds_limit`만 allowlist 방식으로 기록
-- 🤖 **AI Agent 채팅** (`src/agent`) — 화면 하단 "LLM 질의응답" 채팅창에서 판정 결과에 대해 자유 질문 가능. `tool_check_height_compliance`(function calling 대상 tool)를 먼저 호출해 실제 판정 결과를 얻고, `handle_agent_query`가 그 결과 + RAG 근거 조문만 LLM에 넘겨 답변을 생성 — LLM이 판정을 다시 계산하는 경로는 없음(CLAUDE.md 절대 원칙 5). LLM 호출 실패/미설정 시에도 판정 결과와 근거 조문을 나열하는 폴백 답변으로 대체됨
+- 🤖 **AI Agent 채팅 — 실제 tool-calling** (`src/agent`) — 화면 하단 "LLM 질의응답" 채팅창에서 판정 결과에 대해 자유 질문 가능. `ANTHROPIC_API_KEY`가 있으면 `call_llm_with_tools()`가 Claude의 실제 function-calling 루프를 돌려, "정확히 어떤 조문을 위반했나" 같은 질문에는 LLM이 스스로 `tool_get_violation_citations(facility_id, regulation_theme)`를 호출해 RAG 조문 원문만 근거로 답한다 — 그래프를 재실행하는 `tool_check_height_compliance`는 채팅 tool 목록에서 의도적으로 제외해, 채팅 질문마다 판정이 다시 계산되지 않는다(CLAUDE.md 절대 원칙 5). Claude 미설정/tool-calling 실패 시 (1)report+RAG 근거를 프롬프트에 채우는 단발 `call_llm()` 호출 → (2)그것도 실패하면 키워드 기반 규칙 답변, 3단계로 폴백
+
+---
+
+## 📐 아키텍처 문서
+
+손으로 그린 다이어그램이 아니라 실제 코드에서 뽑거나 실제 구조를 그대로 옮긴 문서다.
+
+| 문서 | 내용 |
+|---|---|
+| [`docs/architecture.md`](docs/architecture.md) | 컴포넌트 다이어그램 — app.py/src 계층별 책임과 신뢰 경계(비밀키가 어디에도 서비스 코드에 없다는 것) |
+| [`docs/sequence.md`](docs/sequence.md) | 시퀀스 다이어그램 — (1) 검색→반경조회→다중 테마 판정→지도 렌더링, (2) 챗봇 tool-calling |
+| [`docs/langgraph.md`](docs/langgraph.md) | `graph.get_graph().draw_mermaid()`로 실제 컴파일된 그래프에서 직접 추출한 LangGraph 구조 |
 
 ---
 
@@ -119,8 +133,8 @@
 | 구분 | 출처 | 비고 |
 |---|---|---|
 | 신축 예정 건물 (판정 대상) | 화면에서 건축사업자가 직접 입력 | 위치·계획 높이 모두 평문, 별도 저장소 없음 |
-| 인접 국가유산 참조 데이터 | `src/compliance/config.py`에 하드코딩 | 샘플 좌표/허용높이(남한산성 역사문화환경보존지역), 실 데이터(문화재청 고시) 연동은 이후 단계 |
-| 인접 군사시설 참조 데이터 | `src/compliance/config.py`에 하드코딩 | 샘플 좌표/높이제한(성남 서울공항 비행안전구역), 실 데이터 연동은 이후 단계이며 높이제한 값은 비공개 취급 |
+| 인접 국가유산 참조 데이터 | `src/compliance/config.py`에 하드코딩 | 남한산성 역사문화환경보존지역 — 좌표는 성남시 수정구 방면 진입 지점(남한산성입구역 인근)의 실좌표 수준 근사치. 허용높이는 여전히 임의값(placeholder), 문화재청 고시 실 수치 연동은 이후 단계 |
+| 인접 군사시설 참조 데이터 | `src/compliance/config.py`에 하드코딩 | **서울공항(성남비행장·K-16, 공군 제15특수임무비행단)** — 성남시 대부분이 이 비행장으로 인한 군사시설보호구역/관제공역에 걸쳐 있는 실재 시설. 좌표는 항공정보간행물(AIP) 공개 기준점(ARP) 수준 근사치. 근거 법령은 군사기지 및 군사시설 보호법 제9조(제한보호구역)·제10조(비행안전구역)이며, 규정 테마(`protect_zone`/`flight_safety`)별로 각각 별도의 비공개 높이제한(Z)을 가짐 — **Z값(높이제한 수치) 자체는 안보상 비공개라 여전히 임의값(placeholder)**, 좌표·시설 정체성·법적 근거만 실제 기준. 인접 판정 반경도 군사기지법 제5조 지정범위(전술항공작전기지 5km)를 근거로 함(`ZONE_RADIUS_BY_SUBTYPE`) |
 | 구조화 기준값 DB | `src/db`(SQLite, 런타임 생성) | facility_id별 height_limit_m·근거 법령·고시일 등을 저장, LangGraph의 `rag_check_node`가 정확 대조에 사용 (문서 임베딩 기반 벡터 검색인 `src/rag`와는 별개) |
 | RAG 벡터DB(근거 조문) | `src/rag`(ChromaDB, 런타임 생성) | 건축법·문화재보호법·군사기지법 조문 청크 + facility_id/regulation_type/effective_date/superseded_by 메타데이터. `llm_summarize_node`가 facility_id로 정확 조회해 설명문 근거로만 사용, 판정에는 관여하지 않음 |
 | 암호문 캐시 | `src/db/ciphertext_cache.db`(SQLite, `scripts/generate_mock_ciphertexts.py`로 1회 생성 후 저장소에 커밋된 고정 산출물) | facility_id·`ciphertext_blob`(opaque bytes)·`he_context_version`·`issued_at`·`expires_at`만 저장 — 원본 Z값은 이 테이블에 존재하지 않아 커밋해도 안전 |
@@ -223,7 +237,7 @@ VWORLD_API_KEY=your_vworld_api_key             # 없으면 지도가 라벨 없�
 
 | 리스크 | 대응 방안 |
 |---|---|
-| 군사시설 참조 데이터·높이제한 실데이터 부재 | 가상/샘플 데이터로 대체, PoC 목적임을 명시 |
+| 군사시설 높이제한(Z) 실데이터 부재 — 안보상 비공개라 구조적으로 확보 불가 | 시설 정체성·좌표·근거 법령(서울공항, 군사기지법 제9·10조)은 실재 기준으로 접지하고, 높이제한 수치(Z)만 임의값(placeholder) 유지 — PoC 목적임을 명시 |
 | 동형암호 실연산 도입 시 성능·속도 | 처음에는 더 작은 파라미터(N=4096, scale=2^21)로 시작했으나 노이즈가 ±2mm까지 나타나 파라미터를 키워(N=8192, scale=2^40) 노이즈를 ~1e-9m 수준으로 낮춤 — 부트스트래핑 없이 파라미터 조정만으로 해결 (Phase 7 벤치마크 결과는 아래 참고) |
 | CKKS 근사 연산의 경계값 불안정성 | 계획높이가 군사시설 기준값과 완전히(부동소수점 단위로) 같은 극단 케이스는 노이즈가 부호를 임의로 결정할 수 있음 — 파라미터를 더 키우거나 부트스트래핑을 붙여도 근본적으로 해결되지 않는, 근사 연산 자체의 한계. 실사용자는 비공개인 군사시설 기준값을 정확히 알아맞힐 수 없어 실질적 영향은 없다고 판단, 테스트에서도 이 극단 케이스만 의도적으로 제외함 (`tests/test_compliance_rules.py` 참고) |
 | 2주 내 다기능 구현 부담 | 판정 로직 3종 + UI 우선 구현 후 HE 실연산·AI Agent·RAG 순차 추가 |

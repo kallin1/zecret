@@ -26,9 +26,20 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from src.agent.router import handle_agent_query
+from src.compliance import config
+from src.compliance.search import find_nearby_restricted_zones, summarize_nearby
+from src.geo.buildings import fetch_nearby_building_footprints, to_building_layer_data
+from src.geo.risk_grid import build_risk_grid
 from src.graph.runner import run_full_compliance_check
 
 load_dotenv()
+
+# 지도에 그릴 "인접 판정 반경" — 국가유산 기본 반경과 군사시설 유형별 반경(제5조 근거) 중
+# 가장 큰 값을 시연용 원/격자 표시 기준으로 쓴다. 판정 로직 자체는 카테고리별 반경을 각각
+# 따로 쓰므로(src.graph.runner), 이 값은 순수 시각화 기준일 뿐이다.
+DISPLAY_RADIUS_M = max(
+    [config.ADJACENCY_RADIUS_M] + [config.zone_radius_m(zone) for zone in config.MILITARY_ZONES]
+)
 
 # VWorld Open API(https://www.vworld.kr) WMTS 배경지도 — 실제 건물 폴리곤·도로·주소 라벨이 보이는
 # 공공 지도 타일. X/Y(위치)는 CLAUDE.md 원칙상 평문 취급 대상이라 타일 요청에 Z값은 전혀 실리지 않는다.
@@ -44,9 +55,10 @@ CATEGORY_LABEL = {
     "military": "🪖 군사시설 비행안전구역",
 }
 
-# 검색 전 지도에 보여줄 기본 위치 (성남 서울공항 비행안전구역 인근 데모 좌표)
-DEFAULT_MAP_X = 127.125000
-DEFAULT_MAP_Y = 37.126000
+# 검색 전 지도에 보여줄 기본 위치 — 서울공항 제한보호구역·남한산성 국가유산 반경이 겹치는
+# 데모 좌표(src.compliance.config의 실제 시설 좌표 기준).
+DEFAULT_MAP_X = 127.1567
+DEFAULT_MAP_Y = 37.4504
 
 ACCENT = "#3987e5"  # dataviz 스킬 카테고리 슬롯1(blue, dark) — 관제센터 주조색
 STATUS_GOOD = "#0ca30c"
@@ -131,14 +143,16 @@ if "searched_inputs" not in st.session_state:
     st.session_state.searched_inputs = None
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
+if "nearby_summary" not in st.session_state:
+    st.session_state.nearby_summary = None
 
 st.sidebar.markdown('<div class="zc-panel-title">▌ Control Panel</div>', unsafe_allow_html=True)
 with st.sidebar.form("search_form"):
     plan_x_plain = st.number_input(
-        "경도 (X)", value=None, format="%.6f", placeholder="예: 127.125000"
+        "경도 (X)", value=None, format="%.6f", placeholder="예: 127.156700"
     )
     plan_y_plain = st.number_input(
-        "위도 (Y)", value=None, format="%.6f", placeholder="예: 37.126000"
+        "위도 (Y)", value=None, format="%.6f", placeholder="예: 37.450400"
     )
     plan_height_plain = st.number_input(
         "계획 높이 (m)", value=None, min_value=0.0, placeholder="예: 20.0"
@@ -165,23 +179,28 @@ if submitted:
         st.sidebar.error("경도·위도·계획 높이·이격거리를 모두 입력해주세요.")
     else:
         st.session_state.searched_inputs = search_inputs
+        # 반경 검색(요청 기능 1) — 존재 여부/개수만 조회, 높이(Z)는 이 호출에 전혀 등장하지 않는다.
+        st.session_state.nearby_summary = summarize_nearby(find_nearby_restricted_zones(plan_x_plain, plan_y_plain))
         st.session_state.report = run_full_compliance_check(*search_inputs)
         st.session_state.chat_history = []  # 새 건물을 검색하면 이전 대화는 비운다
 
 report = st.session_state.report
 searched_inputs = st.session_state.searched_inputs
+nearby_summary = st.session_state.nearby_summary
 map_x = searched_inputs[0] if searched_inputs else DEFAULT_MAP_X
 map_y = searched_inputs[1] if searched_inputs else DEFAULT_MAP_Y
 
 total_count = len(report) if report is not None else 0
 violation_count = sum(1 for item in report if item.exceeds_limit) if report else 0
 ok_count = total_count - violation_count
+nearby_count = (nearby_summary["heritage_count"] + nearby_summary["military_count"]) if nearby_summary else 0
 
-s1, s2, s3 = st.columns(3)
+s1, s2, s3, s4 = st.columns(4)
 for col, label, value, color in (
     (s1, "판정 항목", total_count, "#e6e6e6"),
     (s2, "위반", violation_count, STATUS_CRITICAL),
     (s3, "적합", ok_count, STATUS_GOOD),
+    (s4, "반경 내 시설", nearby_count, ACCENT),
 ):
     col.markdown(
         f'<div class="zc-stat"><div class="zc-stat-value" style="color:{color};">{value}</div>'
@@ -194,27 +213,92 @@ map_col, status_col = st.columns([1, 2])
 
 with map_col:
     st.markdown('<div class="zc-panel-title">▌ 계획 건물 위치</div>', unsafe_allow_html=True)
-    marker_layer = pdk.Layer(
-        "ScatterplotLayer",
-        data=[{"lat": map_y, "lon": map_x}],
-        get_position="[lon, lat]",
-        get_fill_color=[57, 135, 229, 220],
-        get_radius=40,
-        radius_min_pixels=8,
-        radius_max_pixels=40,
-    )
+
+    layers = []
+
     if VWORLD_API_KEY:
         # 실제 건물 폴리곤이 보이는 VWorld 타일을 배경으로 직접 그린다 — pydeck 자체 Mapbox/Carto
         # 배경지도(map_style)는 끄고(map_provider=None) TileLayer로 대체한다.
-        tile_layer = pdk.Layer(
-            "TileLayer",
-            data=VWORLD_TILE_URL,
-            min_zoom=0,
-            max_zoom=19,
-            tile_size=256,
+        layers.append(
+            pdk.Layer("TileLayer", data=VWORLD_TILE_URL, min_zoom=0, max_zoom=19, tile_size=256)
         )
+
+        # 실제 성남시 건물 footprint를 2.5D로 압출해 배경 맥락만 보여준다(판정과 무관, 높이는
+        # VWorld 속성값 또는 층수 추정치일 뿐 계획 건물/인접 시설의 Z값과는 아무 관계가 없다).
+        building_features = to_building_layer_data(fetch_nearby_building_footprints(map_x, map_y))
+        if building_features["features"]:
+            layers.append(
+                pdk.Layer(
+                    "GeoJsonLayer",
+                    data=building_features,
+                    extruded=True,
+                    get_elevation="properties.height_m",
+                    get_fill_color=[90, 100, 110, 160],
+                    get_line_color=[140, 150, 160, 200],
+                    line_width_min_pixels=1,
+                )
+            )
+
+    # 격자 단위 위험도(CLAUDE.md 원칙 4) — 개별 시설의 정밀 위치/형태 대신, 반경을 나눈
+    # 격자 셀마다 "겹치는 인접 시설 개수"만 색으로 표시한다. 높이(Z)는 쓰지 않는다.
+    # ScatterplotLayer로 셀 중심마다 cell_size 반경의 정사각형 근사 원을 그린다 — GridCellLayer는
+    # Streamlit 번들 deck.gl 레이어 레지스트리에 없어(GeoJsonLayer로 오인되며 렌더링 실패)
+    # 대신 이미 검증된 ScatterplotLayer를 재사용한다.
+    nearby_facilities = find_nearby_restricted_zones(map_x, map_y) if searched_inputs else []
+    risk_cells = build_risk_grid(map_x, map_y, DISPLAY_RADIUS_M, nearby_facilities)
+    if risk_cells:
+        layers.append(
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=[
+                    {
+                        "lon": cell.center_x,
+                        "lat": cell.center_y,
+                        "color": [208, 59, 59, 90] if cell.facility_count > 0 else [57, 135, 229, 20],
+                    }
+                    for cell in risk_cells
+                ],
+                get_position="[lon, lat]",
+                get_fill_color="color",
+                get_radius=125,  # cell_size(250m)의 절반 — 셀끼리 맞닿는 정도로 근사
+                stroked=False,
+                pickable=False,
+            )
+        )
+
+    # 검색 반경 표시(요청 4 — 검색 반경 오버레이) — 채워진 원이 아니라 테두리만 그려 아래
+    # 격자/배경이 가려지지 않게 한다.
+    if searched_inputs:
+        layers.append(
+            pdk.Layer(
+                "ScatterplotLayer",
+                data=[{"lat": map_y, "lon": map_x}],
+                get_position="[lon, lat]",
+                get_radius=DISPLAY_RADIUS_M,
+                stroked=True,
+                filled=False,
+                get_line_color=[57, 135, 229, 160],
+                line_width_min_pixels=1,
+            )
+        )
+
+    # 계획 건물 위치 — 유일하게 "정확한 위치"를 직접 그리는 마커. 인접 국가유산/군사시설의
+    # 정확한 위치는 위 격자 레이어로만 반영되고 별도 마커로 그려지지 않는다.
+    layers.append(
+        pdk.Layer(
+            "ScatterplotLayer",
+            data=[{"lat": map_y, "lon": map_x}],
+            get_position="[lon, lat]",
+            get_fill_color=[57, 135, 229, 220],
+            get_radius=40,
+            radius_min_pixels=8,
+            radius_max_pixels=40,
+        )
+    )
+
+    if VWORLD_API_KEY:
         deck = pdk.Deck(
-            layers=[tile_layer, marker_layer],
+            layers=layers,
             initial_view_state=pdk.ViewState(latitude=map_y, longitude=map_x, zoom=17),
             map_provider=None,
             # map_style를 명시적으로 비우지 않으면 pydeck이 내부 플레이스홀더 문자열
@@ -225,7 +309,7 @@ with map_col:
         # 지명 라벨이 있는 배경지도는 확대/축소 단계에 따라 영문/한글이 뒤섞여 보이는 문제가 있어,
         # 라벨이 아예 없는 스타일(dark_no_labels)을 써서 언어 혼용 자체를 없앤다.
         deck = pdk.Deck(
-            layers=[marker_layer],
+            layers=layers,
             initial_view_state=pdk.ViewState(latitude=map_y, longitude=map_x, zoom=13),
             map_style="dark_no_labels",
         )
@@ -234,7 +318,7 @@ with map_col:
         st.caption("검색 전 기본 위치입니다. 좌측에서 검색하면 계획 건물 위치로 갱신됩니다.")
     if not VWORLD_API_KEY:
         st.caption("VWORLD_API_KEY 미설정 — 실제 건물이 보이는 배경지도를 쓰려면 .env에 키를 추가하세요.")
-    st.caption("인접 국가유산/군사시설의 위치는 지도에 표시하지 않습니다.")
+    st.caption("인접 국가유산/군사시설은 정확한 위치 대신 격자 단위 위험도로만 표시합니다.")
 
 with status_col:
     st.markdown('<div class="zc-panel-title">▌ 판정 현황</div>', unsafe_allow_html=True)
@@ -252,8 +336,16 @@ with status_col:
             for item in items:
                 badge_class = "zc-badge-critical" if item.exceeds_limit else "zc-badge-ok"
                 badge_text = "위반" if item.exceeds_limit else "적합"
+                # 군사시설처럼 규정 테마가 여러 개인 시설은 이름 옆에 "어떤 규정을 판단했는지"
+                # 표시한다 — 같은 시설이라도 테마별로 위반/적합이 갈릴 수 있기 때문이다.
+                row_name = (
+                    f"{item.facility_name} <span style='color:{MUTED};font-size:11px;'>"
+                    f"({html.escape(item.regulation_label)})</span>"
+                    if item.regulation_label
+                    else item.facility_name
+                )
                 st.markdown(
-                    f'<div class="zc-row"><span class="zc-row-name">{item.facility_name}</span>'
+                    f'<div class="zc-row"><span class="zc-row-name">{row_name}</span>'
                     f'<span class="zc-badge {badge_class}">{badge_text}</span></div>',
                     unsafe_allow_html=True,
                 )

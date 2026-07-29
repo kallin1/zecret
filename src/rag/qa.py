@@ -17,16 +17,27 @@ def _get_collection(persist_directory: str = CHROMA_PERSIST_DIR):
 
 
 def get_citations_for_facility(
-    facility_id: str, top_k: int = 3, persist_directory: str = CHROMA_PERSIST_DIR
+    facility_id: str,
+    regulation_theme: str = "default",
+    top_k: int = 3,
+    persist_directory: str = CHROMA_PERSIST_DIR,
 ) -> List[Dict[str, Any]]:
-    """facility_id로 최신(미대체) 조문 청크만 정확히 조회한다 — src.db 구조화 DB와 동일한 키.
+    """(facility_id, regulation_theme)로 최신(미대체) 조문 청크만 정확히 조회한다 — src.db
+    구조화 DB와 동일한 키. 군사시설처럼 규정 테마가 여러 개인 시설은 regulation_theme을
+    명시해야 그 테마에 해당하는 조문만 나온다.
 
-    메타데이터 필터(facility_id + superseded_by == "")만 사용하는 정확 조회라, 임베딩
-    유사도와 무관하게 같은 facility_id에는 항상 같은 근거 청크가 반환된다.
+    메타데이터 필터(facility_id + regulation_theme + superseded_by == "")만 사용하는 정확
+    조회라, 임베딩 유사도와 무관하게 같은 키에는 항상 같은 근거 청크가 반환된다.
     """
     collection = _get_collection(persist_directory)
     result = collection.get(
-        where={"$and": [{"facility_id": facility_id}, _NOT_SUPERSEDED_FILTER]},
+        where={
+            "$and": [
+                {"facility_id": facility_id},
+                {"regulation_theme": regulation_theme},
+                _NOT_SUPERSEDED_FILTER,
+            ]
+        },
         limit=top_k,
     )
     return [

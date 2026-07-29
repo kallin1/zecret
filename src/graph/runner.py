@@ -72,6 +72,9 @@ class CategoryResult:
 
     margin은 데이터 계층(그래프의 computation_result)에는 존재하지만, 이 필드를 읽는
     쪽(app.py)은 exceeds_limit만 렌더링해야 한다 (CLAUDE.md 절대 원칙 1, 2 / 체크포인트 ③).
+
+    regulation_theme/regulation_label은 "어떤 규정에서 위반했는지" 구분하는 필드다 — 군사
+    시설처럼 규정 테마가 여러 개인 시설은 항목이 테마 수만큼 나뉘어 반환된다.
     """
 
     facility_type: str
@@ -80,6 +83,8 @@ class CategoryResult:
     exceeds_limit: bool
     margin: Optional[float]
     final_message: str
+    regulation_theme: str = "default"
+    regulation_label: str = ""
 
 
 def _to_category_result(state: ComplianceState) -> CategoryResult:
@@ -91,6 +96,8 @@ def _to_category_result(state: ComplianceState) -> CategoryResult:
         exceeds_limit=result["exceeds_limit"],
         margin=result["margin"],
         final_message=state["final_message"],
+        regulation_theme=state.get("regulation_theme") or "default",
+        regulation_label=state.get("regulation_label") or "",
     )
 
 
@@ -100,10 +107,12 @@ def run_full_compliance_check(
     plan_height_plain: float,
     setback_distance_m: float,
 ) -> List[CategoryResult]:
-    """계획 건물 1건에 대해 3개 카테고리 전부를 LangGraph 파이프라인으로 판정한다.
+    """계획 건물 1건에 대해 일조권/국가유산/군사시설 전부를 LangGraph 파이프라인으로 판정한다.
 
-    일조권 사선제한은 항상 판정하고, 국가유산/군사시설은 계획 위치 기준
-    ADJACENCY_RADIUS_M 이내에 있는 것만 인접 판정 대상에 포함한다.
+    일조권 사선제한은 항상 판정하고, 국가유산은 config.ADJACENCY_RADIUS_M, 군사시설은
+    시설 유형별 반경(config.zone_radius_m, 군사기지법 제5조 지정범위 근거) 이내에 있는
+    것만 인접 판정 대상에 포함한다. 군사시설은 규정 테마(예: 제9조 보호구역/제10조 비행
+    안전구역)마다 독립적으로 판정해, 같은 시설이라도 테마별로 위반/적합이 갈릴 수 있다.
     """
     results: List[CategoryResult] = []
 
@@ -114,6 +123,8 @@ def run_full_compliance_check(
             "facility_name": SUNLIGHT_SETBACK_FACILITY_NAME,
             "plan_height": plan_height_plain,
             "setback_distance": setback_distance_m,
+            "regulation_theme": "default",
+            "regulation_label": "",
         }
     )
     results.append(_to_category_result(setback_state))
@@ -128,22 +139,27 @@ def run_full_compliance_check(
                 "facility_name": site.name,
                 "plan_height": plan_height_plain,
                 "setback_distance": setback_distance_m,
+                "regulation_theme": "default",
+                "regulation_label": "",
             }
         )
         results.append(_to_category_result(heritage_state))
 
     for zone in config.MILITARY_ZONES:
-        if haversine_m(plan_x_plain, plan_y_plain, zone.x_plain, zone.y_plain) > config.ADJACENCY_RADIUS_M:
+        if haversine_m(plan_x_plain, plan_y_plain, zone.x_plain, zone.y_plain) > config.zone_radius_m(zone):
             continue
-        military_state = _MILITARY_SUBGRAPH.invoke(
-            {
-                "facility_type": "military",
-                "facility_id": zone.facility_id,
-                "facility_name": zone.name,
-                "plan_height": plan_height_plain,
-                "setback_distance": setback_distance_m,
-            }
-        )
-        results.append(_to_category_result(military_state))
+        for regulation in zone.regulations:
+            military_state = _MILITARY_SUBGRAPH.invoke(
+                {
+                    "facility_type": "military",
+                    "facility_id": zone.facility_id,
+                    "facility_name": zone.name,
+                    "plan_height": plan_height_plain,
+                    "setback_distance": setback_distance_m,
+                    "regulation_theme": regulation.theme_id,
+                    "regulation_label": regulation.label,
+                }
+            )
+            results.append(_to_category_result(military_state))
 
     return results

@@ -10,7 +10,9 @@
 # 그대로 전달만 할 뿐, 여기서 판정을 재계산하거나 프롬프트 내용을 검열/가공하지 않는다
 # — 프롬프트 설계(무엇을 넘길지)는 호출부(nodes.py/router.py) 책임이다.
 
+import json
 import os
+from typing import Any, Callable, Dict, List
 
 
 def call_llm(system_prompt: str, user_prompt: str) -> str:
@@ -36,6 +38,57 @@ def _call_anthropic(system_prompt: str, user_prompt: str) -> str:
         messages=[{"role": "user", "content": user_prompt}],
     )
     return response.content[0].text.strip()
+
+
+def call_llm_with_tools(
+    system_prompt: str,
+    user_prompt: str,
+    tool_specs: List[Dict[str, Any]],
+    tool_executor: Callable[[str, Dict[str, Any]], Any],
+    max_tokens: int = 600,
+    max_turns: int = 4,
+) -> str:
+    """Anthropic 실제 tool-calling 루프 — LLM이 스스로 tool_executor를 호출하고, 그 반환값만
+    근거로 최종 자연어 답변을 만들게 한다 (CLAUDE.md 절대 원칙 5: function calling 결과를
+    그대로 요약). Gemini는 이 앱에서 별도 tool-calling 경로를 구현하지 않았으므로, Claude
+    미설정 시 RuntimeError를 내 호출부가 기존 폴백 경로(call_llm/규칙 기반 답변)로 넘어가게
+    한다.
+    """
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        raise RuntimeError("call_llm_with_tools requires ANTHROPIC_API_KEY (Gemini tool-calling 미지원)")
+
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
+    messages: List[Dict[str, Any]] = [{"role": "user", "content": user_prompt}]
+
+    for _ in range(max_turns):
+        response = client.messages.create(
+            model=model,
+            max_tokens=max_tokens,
+            system=system_prompt,
+            tools=tool_specs,
+            messages=messages,
+        )
+        if response.stop_reason != "tool_use":
+            return "".join(block.text for block in response.content if block.type == "text").strip()
+
+        messages.append({"role": "assistant", "content": response.content})
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                result = tool_executor(block.name, block.input)
+                tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": json.dumps(result, ensure_ascii=False),
+                    }
+                )
+        messages.append({"role": "user", "content": tool_results})
+
+    raise RuntimeError("call_llm_with_tools: max_turns 안에 최종 답변을 얻지 못했다")
 
 
 def _call_gemini(system_prompt: str, user_prompt: str) -> str:

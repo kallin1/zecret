@@ -36,10 +36,22 @@ def test_citations_never_carry_superseded_marker_for_current_chunk():
 
 def test_military_citation_never_mentions_numeric_height():
     """군사시설 근거 조문은 고도제한이 비공개라는 사실만 서술하고, 구체적 수치를 담지
-    않아야 한다 (CLAUDE.md 절대 원칙 1) — 45(현재 샘플 height_limit_m)가 텍스트에 없는지 확인."""
-    citations = get_citations_for_facility("military_seongnam_airport")
-    for c in citations:
-        assert "45" not in c["text"]
+    않아야 한다 (CLAUDE.md 절대 원칙 1) — 45/60(현재 샘플 height_limit_m)이 텍스트에 없는지 확인."""
+    for theme in ("default", "protect_zone", "flight_safety"):
+        citations = get_citations_for_facility("military_seongnam_airport", regulation_theme=theme)
+        for c in citations:
+            assert "45" not in c["text"]
+            assert "60" not in c["text"]
+
+
+def test_military_regulation_themes_return_distinct_citations():
+    """protect_zone(제9조)과 flight_safety(제10조)는 서로 다른 조문을 인용해야 한다."""
+    protect_zone = get_citations_for_facility("military_seongnam_airport", regulation_theme="protect_zone")
+    flight_safety = get_citations_for_facility("military_seongnam_airport", regulation_theme="flight_safety")
+    assert protect_zone and flight_safety
+    assert {c["chunk_id"] for c in protect_zone}.isdisjoint({c["chunk_id"] for c in flight_safety})
+    assert any("제9조" in c["text"] for c in protect_zone)
+    assert any("제10조" in c["text"] for c in flight_safety)
 
 
 def test_unknown_facility_id_returns_empty():

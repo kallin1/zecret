@@ -6,10 +6,12 @@ import pytest
 
 from src.graph.build import build_compliance_graph
 
-# config.py 샘플 좌표: 군사시설 (127.125, 37.126), 국가유산 (127.123456, 37.124123) — 서로
-# 250m 이내라 군사시설이 우선 매칭된다. 국가유산 전용 경로를 타려면 군사시설 반경(1000m)
-# 밖이면서 국가유산 반경 안인 좌표가 필요하다.
-HERITAGE_ONLY_X, HERITAGE_ONLY_Y = 127.113456, 37.124123
+# config.py 샘플 좌표: 군사시설 서울공항(127.1167, 37.4333, 반경 5km), 국가유산 남한산성
+# (127.1597, 37.4517, 반경 1km) — 두 시설 중심 간 거리는 약 4.3km로 군사시설 반경 안에
+# 들어가므로, 군사시설 중심 좌표 자체가 이미 군사시설 우선 매칭 경로를 태운다. 국가유산
+# 전용 경로를 타려면 군사시설 반경(5km) 밖이면서 국가유산 반경(1km) 안인 좌표가 필요하다.
+MILITARY_X, MILITARY_Y = 127.1167, 37.4333
+HERITAGE_ONLY_X, HERITAGE_ONLY_Y = 127.1687, 37.4555
 FAR_FROM_ANY_X, FAR_FROM_ANY_Y = 130.0, 35.0
 
 
@@ -20,9 +22,10 @@ def graph_app():
 
 def test_military_path_violation(graph_app):
     state = graph_app.invoke(
-        {"plan_x": 127.125000, "plan_y": 37.126000, "plan_height": 50.0, "setback_distance": 3.0}
+        {"plan_x": MILITARY_X, "plan_y": MILITARY_Y, "plan_height": 50.0, "setback_distance": 3.0}
     )
     assert state["facility_type"] == "military"
+    # 대표 테마(regulations[0] == protect_zone, 기준 45.0m)로 판정되는 레퍼런스 경로다.
     assert state["computation_result"] == {"exceeds_limit": True, "margin": None}
     assert state["rag_verdict"]["exceeds_limit"] is True
     assert state["rag_verdict"]["matches_computation"] is True
@@ -31,7 +34,7 @@ def test_military_path_violation(graph_app):
 
 def test_military_path_ok(graph_app):
     state = graph_app.invoke(
-        {"plan_x": 127.125000, "plan_y": 37.126000, "plan_height": 40.0, "setback_distance": 3.0}
+        {"plan_x": MILITARY_X, "plan_y": MILITARY_Y, "plan_height": 40.0, "setback_distance": 3.0}
     )
     assert state["computation_result"] == {"exceeds_limit": False, "margin": None}
     assert state["rag_verdict"]["matches_computation"] is True
@@ -59,7 +62,7 @@ def test_sunlight_setback_fallback_path(graph_app):
 
 def test_all_paths_produce_unified_computation_schema(graph_app):
     inputs = [
-        {"plan_x": 127.125000, "plan_y": 37.126000, "plan_height": 50.0, "setback_distance": 3.0},
+        {"plan_x": MILITARY_X, "plan_y": MILITARY_Y, "plan_height": 50.0, "setback_distance": 3.0},
         {"plan_x": HERITAGE_ONLY_X, "plan_y": HERITAGE_ONLY_Y, "plan_height": 10.0, "setback_distance": 3.0},
         {"plan_x": FAR_FROM_ANY_X, "plan_y": FAR_FROM_ANY_Y, "plan_height": 20.0, "setback_distance": 12.0},
     ]

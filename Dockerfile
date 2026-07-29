@@ -9,6 +9,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app.py .
+COPY .streamlit/config.toml .streamlit/config.toml
 COPY src/ src/
 COPY data/ data/
 # scripts/도 함께 패키징한다 — authority_verify_node가 scripts/mock_authority_verify.py를

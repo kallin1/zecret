@@ -30,8 +30,8 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# Streamlit
-.streamlit/
+# Streamlit (secrets.toml만 제외 — config.toml은 다크 테마 설정이라 커밋 대상)
+.streamlit/secrets.toml
 
 # Project-specific: V-World/기상청 캐시 데이터 (원본 대용량 캐시 파일 제외, 폴더 구조는 유지)
 data/sample_dem/*

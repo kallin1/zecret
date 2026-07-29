@@ -29,6 +29,12 @@ class ComplianceState(TypedDict, total=False):
     facility_id: Optional[str]
     facility_name: Optional[str]
 
+    # 군사시설처럼 규정 테마가 여러 개인 시설에서 "어떤 규정을 판단 중인지" 구분하는 키.
+    # 그 외 카테고리(일조권/문화재)는 "default"로 고정된다. he_compute_node/rag_check_node/
+    # llm_summarize_node가 src.db·암호문 캐시·RAG 조회 키로 함께 쓴다.
+    regulation_theme: Optional[str]
+    regulation_label: Optional[str]
+
     # he_compute_node → authority_verify_node 전용 중간 산물 (군사시설 경로에서만 사용)
     diff_ciphertext: Optional[Any]
 

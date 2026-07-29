@@ -20,17 +20,17 @@ OUTPUT_PATH = os.path.join(os.path.dirname(__file__), "..", "docs", "baseline_ph
 
 SCENARIOS = [
     {
-        "label": "military+heritage+sunlight_setback (성남 서울공항/남한산성 인접 위치)",
-        "plan_x_plain": 127.125000,
-        "plan_y_plain": 37.126000,
+        "label": "military+heritage+sunlight_setback (성남 서울공항 보호구역·남한산성 중첩 위치)",
+        "plan_x_plain": 127.1567,
+        "plan_y_plain": 37.4504,
         "plan_height_plain": 20.0,
         "setback_distance_m": 3.0,
     },
     {
-        "label": "military only, 위반 (계획높이 50m > 45m 기준)",
-        "plan_x_plain": 127.125000,
-        "plan_y_plain": 37.126000,
-        "plan_height_plain": 50.0,
+        "label": "military 두 테마 모두 위반 (계획높이 65m > 45m·60m 기준)",
+        "plan_x_plain": 127.1567,
+        "plan_y_plain": 37.4504,
+        "plan_height_plain": 65.0,
         "setback_distance_m": 3.0,
     },
     {

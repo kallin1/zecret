@@ -69,12 +69,14 @@ def test_diff_ciphertext_is_opaque_bytes_not_plaintext():
 
 
 def test_military_zone_ciphertext_holds_only_bytes():
-    """config.MILITARY_ZONES의 암호문 필드에는 bytes만 있고 평문 float 필드가 없다."""
+    """config.MILITARY_ZONES의 규정 테마마다 암호문 필드에는 bytes만 있고 평문 float 필드가 없다."""
     zone = MILITARY_ZONES[0]
-    assert isinstance(zone.height_limit_enc, HeightLimitCiphertext)
-    assert isinstance(zone.height_limit_enc.ciphertext_enc, bytes)
-    field_names = {f for f in vars(zone.height_limit_enc)}
-    assert field_names == {"ciphertext_enc"}
+    assert len(zone.regulations) >= 2  # 제9조 보호구역 + 제10조 비행안전구역, 최소 2개 테마
+    for regulation in zone.regulations:
+        assert isinstance(regulation.height_limit_enc, HeightLimitCiphertext)
+        assert isinstance(regulation.height_limit_enc.ciphertext_enc, bytes)
+        field_names = {f for f in vars(regulation.height_limit_enc)}
+        assert field_names == {"ciphertext_enc"}
 
 
 def _collect_imported_names(module_path: Path):

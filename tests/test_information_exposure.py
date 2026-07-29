@@ -46,8 +46,8 @@ def test_report_heritage_and_setback_items_expose_margin():
     """대조군: 일조권/국가유산 카테고리는 margin(정밀 수치)이 그대로 노출되어야 한다
     (군사시설과 달리 이 두 카테고리는 z값 비공개 대상이 아니기 때문)."""
     report = build_compliance_report(
-        plan_x_plain=127.123456,
-        plan_y_plain=37.124123,
+        plan_x_plain=127.1597,
+        plan_y_plain=37.4517,
         plan_height_plain=10.0,
         setback_distance_m=3.0,
     )

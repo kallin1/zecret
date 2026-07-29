@@ -1,4 +1,4 @@
-# 구조화 기준값 DB 조회 — facility_id 기반 정확 쿼리 (벡터 검색 아님).
+# 구조화 기준값 DB 조회 — (facility_id, regulation_theme) 기반 정확 쿼리 (벡터 검색 아님).
 # rag_check_node(src.graph.nodes)가 여기의 verify_height_against_db()만 호출한다.
 
 from typing import Any, Dict, Optional
@@ -7,8 +7,8 @@ from src.compliance.config import SUNLIGHT_SETBACK_LOW_RISE_MIN_DISTANCE_M
 from src.db.schema import get_connection, seed_if_empty
 
 
-def _fetch_row(facility_id: str) -> Dict[str, Any]:
-    """[내부 전용] facility_id 1건 조회.
+def _fetch_row(facility_id: str, regulation_theme: str = "default") -> Dict[str, Any]:
+    """[내부 전용] (facility_id, regulation_theme) 1건 조회.
 
     이 함수의 반환값(특히 military 행의 height_limit_m)을 그대로 외부에 노출하면 안
     된다 — verify_height_against_db() 안에서만 사용한다 (CLAUDE.md 절대 원칙 1).
@@ -17,12 +17,13 @@ def _fetch_row(facility_id: str) -> Dict[str, Any]:
     try:
         seed_if_empty(conn)
         row = conn.execute(
-            "SELECT * FROM height_limits WHERE facility_id = ?", (facility_id,)
+            "SELECT * FROM height_limits WHERE facility_id = ? AND regulation_theme = ?",
+            (facility_id, regulation_theme),
         ).fetchone()
     finally:
         conn.close()
     if row is None:
-        raise ValueError(f"unknown facility_id: {facility_id!r}")
+        raise ValueError(f"unknown (facility_id, regulation_theme): ({facility_id!r}, {regulation_theme!r})")
     return dict(row)
 
 
@@ -30,8 +31,12 @@ def verify_height_against_db(
     facility_id: str,
     plan_height_plain: float,
     setback_distance_m: Optional[float] = None,
+    regulation_theme: str = "default",
 ) -> Dict[str, Any]:
-    """facility_id로 구조화 기준값 DB와 정확 대조해 초과 여부를 재확인한다.
+    """(facility_id, regulation_theme)로 구조화 기준값 DB와 정확 대조해 초과 여부를 재확인한다.
+
+    군사시설은 규정 테마(예: protect_zone/flight_safety)마다 별도 행이 있어 regulation_theme을
+    명시해야 하고, 그 외 카테고리는 기본값 "default" 그대로 두면 된다.
 
     military/heritage는 height_limit_m을 단순 상한으로 쓰는 대조이지만, sunlight_setback은
     height_limit_m이 상한이 아니라 이격거리 요구치를 가르는 높이 임계값(9m)이므로, 여기서도
@@ -42,7 +47,7 @@ def verify_height_against_db(
     military 카테고리는 height_limit_m을 반환값에 포함하지 않는다 — 이 필드가 있으면
     Z값(높이제한 기준값)이 정밀 수치로 유추 가능해지기 때문이다 (CLAUDE.md 절대 원칙 1, 2).
     """
-    row = _fetch_row(facility_id)
+    row = _fetch_row(facility_id, regulation_theme)
     regulation_type = row["regulation_type"]
 
     if regulation_type == "sunlight_setback":

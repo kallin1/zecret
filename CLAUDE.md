@@ -44,7 +44,10 @@
 - 그래프 오케스트레이션은 LangGraph로 구현한다. 노드 구성: search_zone_node → (조건부 분기) → he_compute_node → authority_verify_node / plain_compute_node → rag_check_node → llm_summarize_node. HE 경로만 authority_verify_node를 거친다.
   이 단일-진입 그래프(`src/graph/build.py`)는 계획 건물 1건당 시설 1건만 판정하는 구조라 `tests/test_graph_end_to_end.py`용 레퍼런스/테스트 경로로 유지한다.
   **실제 Streamlit 앱(`app.py`)이 쓰는 경로는 `src/graph/runner.py`의 `run_full_compliance_check()`이며, 이 함수는 search_zone_node를 거치지 않는다.**
-  대신 일조권 사선제한은 항상 1건, 국가유산·군사시설은 `ADJACENCY_RADIUS_M` 반경 안에 있는 시설마다 각각 서브그래프(`_PLAIN_SUBGRAPH`/`_MILITARY_SUBGRAPH`)를 실행해 여러 건을 동시에 판정·반환한다 — 한 건물이 세 카테고리를 동시에 위반할 수 있어야 하기 때문이다. 새 카테고리를 추가하거나 판정 흐름을 바꿀 때는 `runner.py` 쪽을 기준으로 삼는다.
+  대신 일조권 사선제한은 항상 1건, 국가유산은 `ADJACENCY_RADIUS_M` 반경 안에 있는 시설마다, 군사시설은 시설 유형별 반경(`config.zone_radius_m()`, 군사기지법 제5조 지정범위 근거)에 걸리는 시설마다 각각 서브그래프(`_PLAIN_SUBGRAPH`/`_MILITARY_SUBGRAPH`)를 실행해 여러 건을 동시에 판정·반환한다 — 한 건물이 세 카테고리를 동시에 위반할 수 있어야 하기 때문이다. 새 카테고리를 추가하거나 판정 흐름을 바꿀 때는 `runner.py` 쪽을 기준으로 삼는다.
+- **군사시설은 (facility_id, regulation_theme) 복합키로 규정 테마를 구분한다.** 같은 시설(서울공항)이라도 군사기지법 제9조(제한보호구역)와 제10조(비행안전구역)가 중첩 적용되어 서로 다른 비공개 Z값을 가지므로, `MilitaryZone.regulations`(리스트)에 테마별 `MilitaryRegulationTheme`(자체 암호문)를 두고 `he_compute_node`/`db.queries`/`rag.qa`가 전부 `regulation_theme`을 키로 조회한다. 새 규정 테마를 추가할 때는 `src/db/schema.py`(구조화 DB)·`src/db/ciphertext_cache.py`(암호문 캐시)·`scripts/generate_mock_ciphertexts.py`·`src/rag/ingest.py` 네 곳 모두 같은 (facility_id, regulation_theme) 키로 맞춰야 한다.
+- **군사시설/국가유산은 성남시 실재 시설(서울공항·남한산성)에 좌표·법적 근거를 접지한다.** 다만 높이제한 수치(Z)는 안보상/개별고시 비공개라 여전히 임의값이다 — 실제로 확인된 것은 시설 정체성·위치·근거 조문(군사기지법 제9·10조)뿐이며, 조사 근거는 `src/compliance/config.py`/`src/rag/ingest.py` 주석 참고.
+- 지도 시각화 보조 로직(`src/geo`)은 판정과 무관한 순수 배경/보조 레이어다: `geo/risk_grid.py`(원칙 4의 격자 위험도 계산), `geo/buildings.py`(VWorld 건물통합정보 WFS 2.5D 배경 — VWorld 3D Tiles 공개 API는 폐쇄되어 사용 불가하다는 사전 조사 결과에 따른 대안). 판정 결과에 관여하지 않으므로 이 모듈에 HE/판정 로직을 넣지 않는다.
 
 ## 성능 관련 지침
 - 동형암호 파라미터는 처음부터 크게 잡지 말고 작게 시작한다. 파라미터 크기를 무작정 키우면

@@ -38,11 +38,16 @@ def search_zone_node(state: ComplianceState) -> Dict[str, Any]:
     plan_x, plan_y = state["plan_x"], state["plan_y"]
 
     for zone in config.MILITARY_ZONES:
-        if haversine_m(plan_x, plan_y, zone.x_plain, zone.y_plain) <= config.ADJACENCY_RADIUS_M:
+        if haversine_m(plan_x, plan_y, zone.x_plain, zone.y_plain) <= config.zone_radius_m(zone):
+            # 이 레퍼런스 그래프는 시설 1건당 규정 테마 1건만 시연하므로 대표 테마(첫 번째)를 쓴다
+            # — 여러 테마를 모두 판정하는 실제 경로는 src.graph.runner.run_full_compliance_check.
+            primary = zone.regulations[0]
             return {
                 "facility_type": "military",
                 "facility_id": zone.facility_id,
                 "facility_name": zone.name,
+                "regulation_theme": primary.theme_id,
+                "regulation_label": primary.label,
             }
 
     for site in config.HERITAGE_SITES:
@@ -51,23 +56,36 @@ def search_zone_node(state: ComplianceState) -> Dict[str, Any]:
                 "facility_type": "heritage",
                 "facility_id": site.facility_id,
                 "facility_name": site.name,
+                "regulation_theme": "default",
+                "regulation_label": "",
             }
 
     return {
         "facility_type": "sunlight_setback",
         "facility_id": SUNLIGHT_SETBACK_FACILITY_ID,
         "facility_name": SUNLIGHT_SETBACK_FACILITY_NAME,
+        "regulation_theme": "default",
+        "regulation_label": "",
     }
 
 
 def he_compute_node(state: ComplianceState) -> Dict[str, Any]:
     """군사시설 높이제한 기준값(암호문) - 계획높이(평문) 동형 뺄셈 (실제 TenSEAL CKKS 연산).
 
+    같은 시설이라도 규정 테마(protect_zone/flight_safety)마다 서로 다른 높이제한 암호문을
+    쓰므로, state["regulation_theme"]로 어느 테마를 계산할지 고른다 — 명시돼 있지 않으면
+    (search_zone_node를 거치지 않은 경로 등) 대표 테마(첫 번째)로 폴백한다.
     diff는 여기서 복호화하지 않고 authority_verify_node로만 넘긴다.
     """
     zone = next(z for z in config.MILITARY_ZONES if z.facility_id == state["facility_id"])
-    diff_ciphertext = compute_diff_ciphertext(zone.height_limit_enc, state["plan_height"])
-    return {"diff_ciphertext": diff_ciphertext}
+    theme_id = state.get("regulation_theme") or zone.regulations[0].theme_id
+    regulation = next(r for r in zone.regulations if r.theme_id == theme_id)
+    diff_ciphertext = compute_diff_ciphertext(regulation.height_limit_enc, state["plan_height"])
+    return {
+        "diff_ciphertext": diff_ciphertext,
+        "regulation_theme": regulation.theme_id,
+        "regulation_label": regulation.label,
+    }
 
 
 def authority_verify_node(state: ComplianceState) -> Dict[str, Any]:
@@ -95,9 +113,12 @@ def plain_compute_node(state: ComplianceState) -> Dict[str, Any]:
 
 
 def rag_check_node(state: ComplianceState) -> Dict[str, Any]:
-    """구조화 기준값 DB(src/db)와 facility_id 기반 정확 대조 (벡터 검색이 아님)."""
+    """구조화 기준값 DB(src/db)와 (facility_id, regulation_theme) 기반 정확 대조 (벡터 검색이 아님)."""
     verdict = verify_height_against_db(
-        state["facility_id"], state["plan_height"], setback_distance_m=state.get("setback_distance")
+        state["facility_id"],
+        state["plan_height"],
+        setback_distance_m=state.get("setback_distance"),
+        regulation_theme=state.get("regulation_theme") or "default",
     )
     verdict["matches_computation"] = verdict["exceeds_limit"] == state["computation_result"]["exceeds_limit"]
     return {"rag_verdict": verdict}
@@ -147,7 +168,7 @@ def llm_summarize_node(state: ComplianceState) -> Dict[str, Any]:
     """
     exceeds_limit = state["computation_result"]["exceeds_limit"]
     facility_name = state["facility_name"]
-    citations = get_citations_for_facility(state["facility_id"])
+    citations = get_citations_for_facility(state["facility_id"], regulation_theme=state.get("regulation_theme") or "default")
 
     try:
         final_message = call_llm(

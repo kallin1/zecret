@@ -52,11 +52,14 @@ POLY_MODULUS_DEGREE = 8192
 COEFF_MOD_BIT_SIZES = [60, 40, 60]
 GLOBAL_SCALE = 2**40
 
-# 관리기관이 보유한 군사시설 비행안전구역 높이제한 기준값(Z값, 평문) — 이 스크립트
-# 밖(서비스 코드 src/, app.py)에는 절대 등장하지 않는다. 실 데이터 연동 전까지는
-# src.compliance.config의 MILITARY_ZONES 샘플 좌표와 짝을 맞춘 임의값이다.
+# 관리기관이 보유한 군사시설 높이제한 기준값(Z값, 평문) — 이 스크립트 밖(서비스 코드 src/,
+# app.py)에는 절대 등장하지 않는다. 서울공항은 두 개의 규정 테마(제9조 제한보호구역/제10조
+# 비행안전구역)가 중첩 적용되므로 (facility_id, regulation_theme) 키마다 별도 값을 둔다.
+# 실 고시 수치 연동 전까지는 src.compliance.config의 MILITARY_ZONES 좌표와 짝을 맞춘
+# 임의값이다 — 좌표·시설 정체성은 실제 기준이지만 고도제한 수치 자체는 안보상 비공개다.
 _MILITARY_HEIGHT_LIMITS_PLAIN = {
-    "military_seongnam_airport": 45.0,
+    ("military_seongnam_airport", "protect_zone"): 45.0,
+    ("military_seongnam_airport", "flight_safety"): 60.0,
 }
 
 _CIPHERTEXT_VALIDITY = timedelta(days=365)
@@ -102,10 +105,11 @@ def generate_and_store_ciphertexts(force: bool = False) -> None:
     # 4) 샘플 Z값을 공개키로 암호화해 암호문 캐시(src/db/)에 저장한다.
     issued_at = datetime.now(timezone.utc)
     expires_at = issued_at + _CIPHERTEXT_VALIDITY
-    for facility_id, height_limit_plain in _MILITARY_HEIGHT_LIMITS_PLAIN.items():
+    for (facility_id, regulation_theme), height_limit_plain in _MILITARY_HEIGHT_LIMITS_PLAIN.items():
         ciphertext_enc = ts.ckks_vector(authority_context, [height_limit_plain])
         store_ciphertext(
             facility_id=facility_id,
+            regulation_theme=regulation_theme,
             ciphertext_blob=ciphertext_enc.serialize(),
             he_context_version=HE_CONTEXT_VERSION,
             issued_at=issued_at.isoformat(),

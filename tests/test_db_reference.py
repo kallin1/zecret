@@ -1,26 +1,45 @@
-# 구조화 기준값 DB(src/db) — facility_id 기반 정확 대조(벡터 검색 아님) 검증.
-# Phase 1 완료 기준: 임의 계획높이를 넣으면 DB 기준과 대조해서 bool이 정확히 반환된다.
+# 구조화 기준값 DB(src/db) — (facility_id, regulation_theme) 기반 정확 대조(벡터 검색 아님) 검증.
+# 군사시설은 규정 테마 2건(제9조 protect_zone=45.0m / 제10조 flight_safety=60.0m)이 있다.
 
 import pytest
 
 from src.db.queries import verify_height_against_db
 
 
-def test_military_below_limit_does_not_exceed():
-    result = verify_height_against_db("military_seongnam_airport", plan_height_plain=40.0)
+def test_military_protect_zone_below_limit_does_not_exceed():
+    result = verify_height_against_db(
+        "military_seongnam_airport", plan_height_plain=40.0, regulation_theme="protect_zone"
+    )
     assert result["exceeds_limit"] is False
 
 
-def test_military_above_limit_exceeds():
-    result = verify_height_against_db("military_seongnam_airport", plan_height_plain=50.0)
+def test_military_protect_zone_above_limit_exceeds():
+    result = verify_height_against_db(
+        "military_seongnam_airport", plan_height_plain=50.0, regulation_theme="protect_zone"
+    )
     assert result["exceeds_limit"] is True
 
 
+def test_military_flight_safety_uses_its_own_threshold():
+    """flight_safety 기준(60.0m)은 protect_zone(45.0m)과 달라, 50.0m는 protect_zone만 위반시킨다."""
+    protect_zone = verify_height_against_db(
+        "military_seongnam_airport", plan_height_plain=50.0, regulation_theme="protect_zone"
+    )
+    flight_safety = verify_height_against_db(
+        "military_seongnam_airport", plan_height_plain=50.0, regulation_theme="flight_safety"
+    )
+    assert protect_zone["exceeds_limit"] is True
+    assert flight_safety["exceeds_limit"] is False
+
+
 def test_military_never_exposes_height_limit_m():
-    """군사시설 카테고리는 어떤 plan_height에도 height_limit_m을 반환값에 담지 않는다
+    """군사시설 카테고리는 어떤 plan_height/테마에도 height_limit_m을 반환값에 담지 않는다
     (CLAUDE.md 절대 원칙 1, 2)."""
-    result = verify_height_against_db("military_seongnam_airport", plan_height_plain=45.0)
-    assert "height_limit_m" not in result
+    for theme in ("protect_zone", "flight_safety"):
+        result = verify_height_against_db(
+            "military_seongnam_airport", plan_height_plain=45.0, regulation_theme=theme
+        )
+        assert "height_limit_m" not in result
 
 
 def test_heritage_below_limit_does_not_exceed():
@@ -53,3 +72,10 @@ def test_sunlight_setback_matches_formula(plan_height, setback_distance, expecte
 def test_unknown_facility_id_raises():
     with pytest.raises(ValueError):
         verify_height_against_db("does_not_exist", plan_height_plain=10.0)
+
+
+def test_unknown_regulation_theme_raises():
+    with pytest.raises(ValueError):
+        verify_height_against_db(
+            "military_seongnam_airport", plan_height_plain=10.0, regulation_theme="not_a_real_theme"
+        )
