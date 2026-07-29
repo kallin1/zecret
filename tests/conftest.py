@@ -20,11 +20,10 @@ generate_and_store_ciphertexts()
 
 @pytest.fixture(autouse=True)
 def _no_real_llm_keys_by_default(monkeypatch):
-    """테스트는 로컬 .env에 실제 ANTHROPIC_API_KEY/GEMINI_API_KEY가 들어있어도 그 키에
-    의존하면 안 된다 — 매 테스트 전에 지워서 기본적으로 결정론적 폴백 경로를 타게 한다.
+    """테스트는 로컬 .env에 실제 CLOVASTUDIO_API_KEY가 들어있어도 그 키에 의존하면
+    안 된다 — 매 테스트 전에 지워서 기본적으로 결정론적 폴백 경로를 타게 한다.
     특정 키가 설정된 상황을 검증하려는 테스트는 테스트 본문 안에서 직접
     monkeypatch.setenv()로 다시 설정하면 된다(이 fixture보다 나중에 실행되므로 덮어써진다).
     이게 없으면 개발자 로컬 .env 내용에 따라 테스트가 실제 네트워크 호출을 하게 되어
     느려지거나(quota 에러 재시도) 불안정해진다."""
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("CLOVASTUDIO_API_KEY", raising=False)

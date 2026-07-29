@@ -1,6 +1,6 @@
 {
   "phase": 5,
-  "llm_mode": "fallback (ANTHROPIC_API_KEY 미설정)",
+  "llm_mode": "fallback (CLOVASTUDIO_API_KEY 미설정)",
   "scenarios": [
     {
       "label": "military+heritage+sunlight_setback (성남 서울공항 보호구역·남한산성 중첩 위치)",
@@ -19,7 +19,8 @@
           "margin": -7.0,
           "final_message": "[인접대지경계선 (일조권 사선제한)] 판정 결과: 위반",
           "regulation_theme": "default",
-          "regulation_label": ""
+          "regulation_label": "",
+          "he_latency_ms": null
         },
         {
           "facility_type": "heritage",
@@ -29,7 +30,8 @@
           "margin": -5.0,
           "final_message": "[남한산성 역사문화환경보존지역 (성남 방면)] 판정 결과: 위반",
           "regulation_theme": "default",
-          "regulation_label": ""
+          "regulation_label": "",
+          "he_latency_ms": null
         },
         {
           "facility_type": "military",
@@ -39,7 +41,8 @@
           "margin": null,
           "final_message": "[서울공항(성남비행장) 군사시설보호구역] 판정 결과: 적합",
           "regulation_theme": "protect_zone",
-          "regulation_label": "군사기지 및 군사시설 보호법 제9조 (제한보호구역 고도제한)"
+          "regulation_label": "군사기지 및 군사시설 보호법 제9조 (제한보호구역 고도제한)",
+          "he_latency_ms": 445.87
         },
         {
           "facility_type": "military",
@@ -49,7 +52,8 @@
           "margin": null,
           "final_message": "[서울공항(성남비행장) 군사시설보호구역] 판정 결과: 적합",
           "regulation_theme": "flight_safety",
-          "regulation_label": "군사기지 및 군사시설 보호법 제10조 (비행안전구역 기본표면)"
+          "regulation_label": "군사기지 및 군사시설 보호법 제10조 (비행안전구역 기본표면)",
+          "he_latency_ms": 5.14
         }
       ]
     },
@@ -70,7 +74,8 @@
           "margin": -29.5,
           "final_message": "[인접대지경계선 (일조권 사선제한)] 판정 결과: 위반",
           "regulation_theme": "default",
-          "regulation_label": ""
+          "regulation_label": "",
+          "he_latency_ms": null
         },
         {
           "facility_type": "heritage",
@@ -80,7 +85,8 @@
           "margin": -50.0,
           "final_message": "[남한산성 역사문화환경보존지역 (성남 방면)] 판정 결과: 위반",
           "regulation_theme": "default",
-          "regulation_label": ""
+          "regulation_label": "",
+          "he_latency_ms": null
         },
         {
           "facility_type": "military",
@@ -90,7 +96,8 @@
           "margin": null,
           "final_message": "[서울공항(성남비행장) 군사시설보호구역] 판정 결과: 위반",
           "regulation_theme": "protect_zone",
-          "regulation_label": "군사기지 및 군사시설 보호법 제9조 (제한보호구역 고도제한)"
+          "regulation_label": "군사기지 및 군사시설 보호법 제9조 (제한보호구역 고도제한)",
+          "he_latency_ms": 8.46
         },
         {
           "facility_type": "military",
@@ -100,7 +107,8 @@
           "margin": null,
           "final_message": "[서울공항(성남비행장) 군사시설보호구역] 판정 결과: 위반",
           "regulation_theme": "flight_safety",
-          "regulation_label": "군사기지 및 군사시설 보호법 제10조 (비행안전구역 기본표면)"
+          "regulation_label": "군사기지 및 군사시설 보호법 제10조 (비행안전구역 기본표면)",
+          "he_latency_ms": 8.91
         }
       ]
     },
@@ -121,7 +129,8 @@
           "margin": -0.5,
           "final_message": "[인접대지경계선 (일조권 사선제한)] 판정 결과: 위반",
           "regulation_theme": "default",
-          "regulation_label": ""
+          "regulation_label": "",
+          "he_latency_ms": null
         }
       ]
     }

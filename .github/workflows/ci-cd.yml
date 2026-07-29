@@ -96,7 +96,7 @@ jobs:
             docker pull "${{ env.IMAGE }}:latest"
             docker stop zecret 2>/dev/null || true
             docker rm zecret 2>/dev/null || true
-            # 서버에 미리 준비해 둔 프로덕션 .env(ANTHROPIC_API_KEY/VWORLD_API_KEY 등)를 그대로 주입한다.
+            # 서버에 미리 준비해 둔 프로덕션 .env(CLOVASTUDIO_API_KEY/VWORLD_API_KEY 등)를 그대로 주입한다.
             # /opt/zecret/keys(관리기관 비밀키, scp로 1회 배치)는 이미지에는 절대 넣지 않고
             # 볼륨으로만 마운트한다 — authority_verify_node가 호출하는
             # scripts/mock_authority_verify.py가 컨테이너 안에서 이 경로를 읽는다.

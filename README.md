@@ -95,7 +95,7 @@
 - 📚 **RAG 벡터DB 근거 인용** (`src/rag`, ChromaDB) — 건축법·문화재보호법·군사기지법 조문 청크를 facility_id로 정확 조회해 "왜 이 기준이 적용되는지" 근거 문장을 제공. 판정에는 관여하지 않으며, 개정으로 대체된(`superseded_by`) 구버전 조문은 검색에서 제외
 - 🗣️ **LLM 판정 설명** (`llm_summarize_node`) — 이미 확정된 판정 결과(bool)와 RAG 근거만으로 설명문을 생성하고, 재판단·임의 수치 언급은 프롬프트로 금지 (CLAUDE.md 절대 원칙 5). API 키 미설정/호출 실패 시 결정론적 템플릿 문구로 자동 대체되어 파이프라인이 항상 끝까지 실행됨
 - 🔭 **Langfuse 노드별 트레이싱** (`src/graph/tracing.py`) — 각 노드 실행을 span으로 기록하되, 계획 높이·정확한 좌표·암호문 등은 절대 남기지 않고 `facility_id`/`regulation_type`/`latency_ms`/`exceeds_limit`만 allowlist 방식으로 기록
-- 🤖 **AI Agent 채팅 — 실제 tool-calling** (`src/agent`) — 화면 하단 "LLM 질의응답" 채팅창에서 판정 결과에 대해 자유 질문 가능. `ANTHROPIC_API_KEY`가 있으면 `call_llm_with_tools()`가 Claude의 실제 function-calling 루프를 돌려, "정확히 어떤 조문을 위반했나" 같은 질문에는 LLM이 스스로 `tool_get_violation_citations(facility_id, regulation_theme)`를 호출해 RAG 조문 원문만 근거로 답한다 — 그래프를 재실행하는 `tool_check_height_compliance`는 채팅 tool 목록에서 의도적으로 제외해, 채팅 질문마다 판정이 다시 계산되지 않는다(CLAUDE.md 절대 원칙 5). Claude 미설정/tool-calling 실패 시 (1)report+RAG 근거를 프롬프트에 채우는 단발 `call_llm()` 호출 → (2)그것도 실패하면 키워드 기반 규칙 답변, 3단계로 폴백
+- 🤖 **AI Agent 채팅 — 실제 tool-calling** (`src/agent`) — 화면 하단 "LLM 질의응답" 채팅창에서 판정 결과에 대해 자유 질문 가능. `CLOVASTUDIO_API_KEY`가 있으면 `call_llm_with_tools()`가 네이버클라우드 CLOVA Studio(HyperCLOVA X)의 실제 function-calling 루프를 돌려, "정확히 어떤 조문을 위반했나" 같은 질문에는 LLM이 스스로 `tool_get_violation_citations(facility_id, regulation_theme)`를 호출해 RAG 조문 원문만 근거로 답한다 — 그래프를 재실행하는 `tool_check_height_compliance`는 채팅 tool 목록에서 의도적으로 제외해, 채팅 질문마다 판정이 다시 계산되지 않는다(CLAUDE.md 절대 원칙 5). 키 미설정/tool-calling 실패 시 (1)report+RAG 근거를 프롬프트에 채우는 단발 `call_llm()` 호출 → (2)그것도 실패하면 키워드 기반 규칙 답변, 3단계로 폴백
 
 ---
 
@@ -119,7 +119,7 @@
 | UI | Streamlit |
 | 동형암호 | **TenSEAL** (CKKS) — 군사시설 카테고리에 실제 적용 완료. `poly_modulus_degree=8192`, `coeff_mod_bit_sizes=[60,40,60]`, `global_scale=2**40`, galois/relinearization key는 생성하지 않음(뺄셈 1회만 필요해 불필요) — 파라미터 선정 근거는 `scripts/generate_mock_ciphertexts.py` 주석 참고 |
 | AI Agent | `src/agent` — `tool_check_height_compliance`(tool) → `handle_agent_query`(결과+RAG 근거를 LLM에 전달해 자연어 답변). 화면의 "LLM 질의응답" 채팅창에서 사용 |
-| LLM 호출 | `src/graph/llm_client.py`가 Claude/Gemini 공용 호출부 — `ANTHROPIC_API_KEY`가 있으면 Claude(`claude-sonnet-5` 기본값), 없고 `GEMINI_API_KEY`가 있으면 Gemini(`gemini-2.0-flash` 기본값), 둘 다 없거나 호출 실패 시 결정론적 템플릿/근거 나열로 폴백. `llm_summarize_node`와 AI Agent 채팅이 이 모듈을 공유 |
+| LLM 호출 | `src/graph/llm_client.py`가 네이버클라우드 CLOVA Studio(HyperCLOVA X) 호출부 — `CLOVASTUDIO_API_KEY`가 있으면 Chat Completions v3 API(`HCX-005` 기본값)를 호출하고, 없거나 호출 실패 시 결정론적 템플릿/근거 나열로 폴백. `llm_summarize_node`와 AI Agent 채팅이 이 모듈을 공유 |
 | RAG | ChromaDB(`src/rag`) — 법령 조문 청크를 facility_id로 정확 조회해 근거 인용 전용으로 사용 (판정 비관여), 일반 법령 Q&A는 미구현 |
 | 트레이싱 | Langfuse(`src/graph/tracing.py`) — 노드별 span 기록, 민감 필드는 allowlist 방식으로 마스킹 |
 | 배포 | 단일 Dockerfile로 패키징한 컨테이너를 AWS EC2에 배포. GitHub Actions(`.github/workflows/ci-cd.yml`)가 테스트→GHCR 이미지 push까지는 항상 수행하고, EC2 시크릿이 등록되면 이어서 자동 배포 — 자세한 내용은 "CI/CD 배포" 절 참고 |
@@ -186,11 +186,9 @@ docker run --rm -p 8501:8501 --env-file .env \
 ### 환경 변수 (예시)
 
 ```
-ANTHROPIC_API_KEY=your_anthropic_api_key       # 있으면 Claude 우선 사용
-ANTHROPIC_MODEL=claude-sonnet-5
-GEMINI_API_KEY=your_gemini_api_key             # ANTHROPIC_API_KEY가 없을 때 대신 사용됨
-GEMINI_MODEL=gemini-2.0-flash
-# 위 두 키가 모두 없으면 llm_summarize_node/AI Agent 채팅 모두 결정론적 폴백 문구로 동작
+CLOVASTUDIO_API_KEY=your_clovastudio_api_key   # 있으면 CLOVA Studio(HyperCLOVA X) 사용
+CLOVASTUDIO_MODEL=HCX-005
+# 키가 없으면 llm_summarize_node/AI Agent 채팅 모두 결정론적 폴백 문구로 동작
 LANGFUSE_PUBLIC_KEY=                            # 없으면 노드별 트레이싱이 조용히 비활성화됨
 LANGFUSE_SECRET_KEY=
 LANGFUSE_HOST=https://cloud.langfuse.com
@@ -248,7 +246,7 @@ VWORLD_API_KEY=your_vworld_api_key             # 없으면 지도가 라벨 없�
 
 ## 📎 Phase 5 baseline
 
-`docs/baseline_phase5.json`, `docs/baseline_phase5_screenshot.png`에 이번 단계(Mock HE + RAG + LLM 연결) 시점의 전체 파이프라인 출력을 기록해 두었습니다. 이 환경은 `ANTHROPIC_API_KEY`가 없어 `llm_summarize_node`가 템플릿 폴백 문구로 동작한 상태의 baseline입니다 — 실제 키를 넣고 `python scripts/capture_phase5_baseline.py`를 다시 실행하면 LLM이 생성한 문장으로 baseline을 갱신할 수 있습니다. 이후 단계에서 판정 로직/그래프를 바꿀 때 이 baseline과 비교해 회귀를 확인하는 용도입니다.
+`docs/baseline_phase5.json`, `docs/baseline_phase5_screenshot.png`에 이번 단계(Mock HE + RAG + LLM 연결) 시점의 전체 파이프라인 출력을 기록해 두었습니다. 이 환경은 `CLOVASTUDIO_API_KEY`가 없어 `llm_summarize_node`가 템플릿 폴백 문구로 동작한 상태의 baseline입니다 — 실제 키를 넣고 `python scripts/capture_phase5_baseline.py`를 다시 실행하면 LLM이 생성한 문장으로 baseline을 갱신할 수 있습니다. 이후 단계에서 판정 로직/그래프를 바꿀 때 이 baseline과 비교해 회귀를 확인하는 용도입니다.
 
 Phase 6(Mock HE → 실제 TenSEAL CKKS 교체) 이후, 군사시설 카테고리에 대해 이 baseline과 동일한 입력으로 실제 CKKS 파이프라인을 실행해 `exceeds_limit`이 baseline과 정확히 일치함을 `tests/test_he_pipeline.py::test_he_result_matches_phase5_baseline`로 확인했습니다 — Mock에서 실 연산으로 바뀌어도 판정 결과 자체는 달라지지 않았습니다. 실제 CKKS 파이프라인이 반영된 화면은 `docs/phase6_real_tenseal_screenshot.png`에 저장해 두었습니다.
 

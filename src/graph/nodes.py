@@ -163,8 +163,9 @@ def llm_summarize_node(state: ComplianceState) -> Dict[str, Any]:
 
     LLM은 판정을 다시 내리지 않는다 — exceeds_limit은 이미 확정된 입력으로만 주어지고,
     시스템 프롬프트가 재판단·임의 수치 언급을 명시적으로 금지한다 (CLAUDE.md 절대 원칙 5).
-    call_llm()이 Claude/Gemini 중 설정된 쪽을 자동으로 고른다 — 둘 다 없거나 호출이
-    실패하면 결정론적 템플릿으로 대체해, LLM 장애가 전체 파이프라인을 막지 않도록 한다.
+    call_llm()이 CLOVASTUDIO_API_KEY 설정 여부에 따라 CLOVA Studio를 호출한다 — 키가
+    없거나 호출이 실패하면 결정론적 템플릿으로 대체해, LLM 장애가 전체 파이프라인을
+    막지 않도록 한다.
     """
     exceeds_limit = state["computation_result"]["exceeds_limit"]
     facility_name = state["facility_name"]

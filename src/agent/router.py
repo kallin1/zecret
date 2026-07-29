@@ -12,7 +12,7 @@
 # tool_check_height_compliance(그래프를 재실행하는 tool)는 절대 노출하지 않고,
 # tool_get_violation_citations(순수 RAG 조회, 그래프 재실행 없음)만 노출한다.
 #
-# 3단계 폴백: (1) ANTHROPIC_API_KEY가 있으면 실제 tool-calling으로 근거 조문을 정확히
+# 3단계 폴백: (1) CLOVASTUDIO_API_KEY가 있으면 실제 tool-calling으로 근거 조문을 정확히
 # 조회해 답변 → (2) 실패하거나 키가 없으면 기존처럼 report+RAG 근거를 프롬프트에 통째로
 # 채워 넣는 call_llm() 단발 호출 → (3) 그것도 실패하면 질문 키워드 기반 규칙 답변.
 #
@@ -48,7 +48,7 @@ _TOOL_SPECS = [
             "판정 결과 항목 하나(facility_id, regulation_theme)에 해당하는 근거 법령 조문 "
             "원문을 조회한다. '정확히 어떤 법령/조문을 위반했나' 류 질문에만 사용한다."
         ),
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "facility_id": {"type": "string", "description": "아래 컨텍스트에 표시된 시설 ID"},
@@ -175,7 +175,7 @@ def _fallback_answer(user_query: str, report: List[CategoryResult]) -> str:
 def handle_agent_query(user_query: str, report: List[CategoryResult]) -> str:
     """자연어 질의를 처리한다 — 3단계 폴백:
 
-    1) ANTHROPIC_API_KEY가 있으면 call_llm_with_tools()로 실제 tool-calling을 시도한다.
+    1) CLOVASTUDIO_API_KEY가 있으면 call_llm_with_tools()로 실제 tool-calling을 시도한다.
        LLM이 필요하다고 판단하면 get_violation_citations 도구를 스스로 호출해 정확한
        조문을 조회하고, 그 반환값만 근거로 답한다 (CLAUDE.md 절대 원칙 5).
     2) 위가 불가능하거나 실패하면, report+RAG 근거를 프롬프트에 미리 채워 넣는 단발

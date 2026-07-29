@@ -59,23 +59,23 @@ sequenceDiagram
     actor U as 건축사업자
     participant App as app.py
     participant Router as agent.router
-    participant Claude as Claude API
+    participant Clova as CLOVA Studio API
     participant Tool as tools.tool_get_violation_citations
     participant RAG as rag.qa
 
     U->>App: "정확히 어떤 조문을 위반했어?"
     App->>Router: handle_agent_query(질문, report)
     Router->>Router: _build_grounding_context(report)<br/>(facility_id·regulation_theme·margin/비공개만 포함)
-    Router->>Claude: call_llm_with_tools(system, prompt, tool_specs)
-    Claude-->>Router: tool_use(get_violation_citations, {facility_id, regulation_theme})
+    Router->>Clova: call_llm_with_tools(system, prompt, tool_specs)
+    Clova-->>Router: tool_calls(get_violation_citations, {facility_id, regulation_theme})
     Router->>Tool: _execute_tool("get_violation_citations", ...)
     Tool->>RAG: get_citations_for_facility(facility_id, regulation_theme)
     RAG-->>Tool: 조문 텍스트(수치 없음)
     Tool-->>Router: citations
-    Router->>Claude: tool_result 전달
-    Claude-->>Router: 최종 자연어 답변(조문 인용 포함)
+    Router->>Clova: tool_result 전달
+    Clova-->>Router: 최종 자연어 답변(조문 인용 포함)
     Router-->>App: answer
     App-->>U: 채팅 답변 렌더링
 
-    Note over Router,Claude: ANTHROPIC_API_KEY 미설정/실패 시 call_llm()<br/>단발 호출로, 그것도 실패하면 키워드 기반<br/>규칙 답변으로 3단 폴백 (판정 결과는 항상<br/>이미 확정된 report 그대로, LLM이 재계산 안 함)
+    Note over Router,Clova: CLOVASTUDIO_API_KEY 미설정/실패 시 call_llm()<br/>단발 호출로, 그것도 실패하면 키워드 기반<br/>규칙 답변으로 3단 폴백 (판정 결과는 항상<br/>이미 확정된 report 그대로, LLM이 재계산 안 함)
 ```

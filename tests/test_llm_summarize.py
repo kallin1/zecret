@@ -1,6 +1,6 @@
 # llm_summarize_node — CLAUDE.md 절대 원칙 5(LLM 임의 응답 금지) 검증.
 # LLM은 이미 확정된 computation_result만 설명하고, 판정 자체를 재판단하거나 임의의
-# 수치를 지어내면 안 된다. call_llm()(Claude/Gemini 공용 호출부)을 monkeypatch해
+# 수치를 지어내면 안 된다. call_llm()(CLOVA Studio 호출부)을 monkeypatch해
 # 실제 API 호출 없이 검증한다.
 
 import src.graph.nodes as nodes
@@ -25,8 +25,7 @@ def _heritage_state(exceeds_limit: bool, margin: float):
 
 
 def test_fallback_used_when_no_api_key(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("CLOVASTUDIO_API_KEY", raising=False)
     result = nodes.llm_summarize_node(_military_state(True))
     assert result["final_message"] == "[성남 서울공항 비행안전구역] 판정 결과: 위반"
 
@@ -74,8 +73,7 @@ def test_user_prompt_never_contains_raw_margin_or_coordinates():
 
 
 def test_llm_summarize_node_captures_rag_citations(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("CLOVASTUDIO_API_KEY", raising=False)
     result = nodes.llm_summarize_node(_heritage_state(True, -3.0))
     assert result["rag_citations"]
     assert all(c["facility_id"] == "heritage_namhansanseong" for c in result["rag_citations"])

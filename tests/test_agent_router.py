@@ -3,7 +3,7 @@
 #
 # handle_agent_query()는 이미 계산된 report(CategoryResult 리스트)를 받는다 — 채팅
 # 질문마다 판정 그래프를 다시 실행하지 않는다 (tests/conftest.py의 autouse fixture가
-# 매 테스트마다 ANTHROPIC_API_KEY/GEMINI_API_KEY를 지워주므로, 아래 report 계산은
+# 매 테스트마다 CLOVASTUDIO_API_KEY를 지워주므로, 아래 report 계산은
 # 항상 실제 네트워크 호출 없이 폴백 경로로 빠르게 끝난다).
 
 import pytest
@@ -113,19 +113,19 @@ def test_router_does_not_import_the_compliance_graph_entrypoint():
 
 
 # --- 실제 tool-calling 경로 (요청 기능 3) ---
-# conftest.py의 autouse fixture가 매 테스트 전에 ANTHROPIC_API_KEY를 지우므로, 이 경로를
+# conftest.py의 autouse fixture가 매 테스트 전에 CLOVASTUDIO_API_KEY를 지우므로, 이 경로를
 # 검증하려면 테스트 본문에서 직접 monkeypatch.setenv()로 다시 켜야 한다.
 
 
-def test_tool_calling_used_when_anthropic_key_configured(monkeypatch, default_report):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-dummy")
+def test_tool_calling_used_when_clovastudio_key_configured(monkeypatch, default_report):
+    monkeypatch.setenv("CLOVASTUDIO_API_KEY", "nv-test-dummy")
     monkeypatch.setattr(router, "call_llm_with_tools", lambda *a, **k: "tool-calling으로 만든 답변")
     answer = router.handle_agent_query("정확히 어떤 조문을 위반했어?", default_report)
     assert answer == "tool-calling으로 만든 답변"
 
 
 def test_falls_back_to_plain_call_llm_when_tool_calling_fails(monkeypatch, default_report):
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-dummy")
+    monkeypatch.setenv("CLOVASTUDIO_API_KEY", "nv-test-dummy")
 
     def _boom(*a, **k):
         raise RuntimeError("tool-calling unavailable")

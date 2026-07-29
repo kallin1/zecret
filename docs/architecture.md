@@ -48,11 +48,11 @@ flowchart TB
 
     subgraph Agent["src/agent — AI Agent"]
         Tools["tools.py<br/>tool_check_height_compliance<br/>tool_search_nearby_restricted_zones<br/>tool_get_violation_citations"]
-        Router["router.py<br/>handle_agent_query()<br/>실제 tool-calling(Claude) → 단발 LLM → 규칙 폴백"]
+        Router["router.py<br/>handle_agent_query()<br/>실제 tool-calling(CLOVA Studio) → 단발 LLM → 규칙 폴백"]
     end
 
     subgraph External["외부 API"]
-        LLMApi["Claude / Gemini API"]
+        LLMApi["CLOVA Studio (HyperCLOVA X) API"]
         VWorldApi["VWorld WMTS 타일 + 건물통합정보(WFS)"]
     end
 
