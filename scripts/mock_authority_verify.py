@@ -52,6 +52,22 @@ def verify_diff(diff_ciphertext_enc: bytes) -> bool:
     return decrypted_diff < 0
 
 
+def verify_diff_vector(diff_ciphertext_enc: bytes, slot_count: int) -> List[bool]:
+    """[CKKS SIMD 배치] 슬롯 여러 개가 하나의 벡터로 패킹된 diff 암호문 1개를 복호화해,
+    슬롯별 부호를 한 번의 복호화 호출로 전부 반환한다.
+
+    verify_diff_batch()와 다른 점: 그쪽은 "따로따로 암호화된 ciphertext 여러 개"를 순회하며
+    각각 복호화하는 것이고, 이 함수는 애초에 encrypt 시점에 여러 값을 슬롯 하나짜리 벡터가
+    아니라 슬롯 N개짜리 벡터 하나로 묶어뒀던 것을 "복호화도 한 번만" 수행한다 — CKKS의
+    SIMD 배치 연산 자체를 보여주기 위한 경로다(src.compliance.config의
+    MilitaryZone.batch_height_limit_enc, scripts/generate_mock_ciphertexts.py 참고).
+    """
+    secret_context = _load_secret_context()
+    diff_vector = ts.ckks_vector_from(secret_context, diff_ciphertext_enc)
+    decrypted = diff_vector.decrypt()[:slot_count]
+    return [value < 0 for value in decrypted]
+
+
 def verify_diff_batch(diff_ciphertexts_enc: List[bytes]) -> List[bool]:
     """[Phase 7 벤치마크 전용] 여러 diff 암호문을 한 번의 호출로 묶어 검증한다.
 

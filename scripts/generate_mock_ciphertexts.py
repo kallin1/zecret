@@ -62,6 +62,15 @@ _MILITARY_HEIGHT_LIMITS_PLAIN = {
     ("military_seongnam_airport", "flight_safety"): 60.0,
 }
 
+# CKKS SIMD 배치 데모용 — 위 두 값을 슬롯 1개짜리 벡터 두 개로 나눠 암호화하는 대신, 슬롯
+# 2개짜리 벡터 하나(순서: protect_zone, flight_safety)로 묶어 별도로 한 번 더 암호화해둔다.
+# regulation_theme="__batch__"라는 예약 키로 저장하며, 이 값이 없어도(구버전 캐시) 서비스는
+# 조용히 배치 데모 패널만 숨긴다 — 개별 테마 판정(원칙 1의 핵심 경로)에는 영향 없다.
+_MILITARY_BATCH_HEIGHT_LIMITS_PLAIN = {
+    "military_seongnam_airport": [45.0, 60.0],  # 순서: protect_zone, flight_safety
+}
+_BATCH_REGULATION_THEME = "__batch__"
+
 _CIPHERTEXT_VALIDITY = timedelta(days=365)
 
 
@@ -111,6 +120,18 @@ def generate_and_store_ciphertexts(force: bool = False) -> None:
             facility_id=facility_id,
             regulation_theme=regulation_theme,
             ciphertext_blob=ciphertext_enc.serialize(),
+            he_context_version=HE_CONTEXT_VERSION,
+            issued_at=issued_at.isoformat(),
+            expires_at=expires_at.isoformat(),
+        )
+
+    # 5) CKKS SIMD 배치 데모용 — 여러 규정 테마의 Z값을 슬롯 N개짜리 벡터 하나로 묶어 암호화.
+    for facility_id, height_limits_plain in _MILITARY_BATCH_HEIGHT_LIMITS_PLAIN.items():
+        batch_ciphertext_enc = ts.ckks_vector(authority_context, height_limits_plain)
+        store_ciphertext(
+            facility_id=facility_id,
+            regulation_theme=_BATCH_REGULATION_THEME,
+            ciphertext_blob=batch_ciphertext_enc.serialize(),
             he_context_version=HE_CONTEXT_VERSION,
             issued_at=issued_at.isoformat(),
             expires_at=expires_at.isoformat(),

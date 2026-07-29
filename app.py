@@ -28,9 +28,10 @@ from dotenv import load_dotenv
 from src.agent.router import handle_agent_query
 from src.compliance import config
 from src.compliance.search import find_nearby_restricted_zones, summarize_nearby
+from src.db.ciphertext_cache import describe_ciphertext_for_display
 from src.geo.buildings import fetch_nearby_building_footprints, to_building_layer_data
 from src.geo.risk_grid import build_risk_grid
-from src.graph.runner import run_full_compliance_check
+from src.graph.runner import compute_he_batch_demo, run_full_compliance_check
 
 load_dotenv()
 
@@ -149,19 +150,19 @@ if "nearby_summary" not in st.session_state:
 st.sidebar.markdown('<div class="zc-panel-title">▌ Control Panel</div>', unsafe_allow_html=True)
 with st.sidebar.form("search_form"):
     plan_x_plain = st.number_input(
-        "경도 (X)", value=None, format="%.6f", placeholder="예: 127.156700"
+        "경도 (X)", value=None, format="%.6f", placeholder="경도를 입력하세요"
     )
     plan_y_plain = st.number_input(
-        "위도 (Y)", value=None, format="%.6f", placeholder="예: 37.450400"
+        "위도 (Y)", value=None, format="%.6f", placeholder="위도를 입력하세요"
     )
     plan_height_plain = st.number_input(
-        "계획 높이 (m)", value=None, min_value=0.0, placeholder="예: 20.0"
+        "계획 높이 (m)", value=None, min_value=0.0, placeholder="계획 높이를 입력하세요"
     )
     setback_distance_m = st.number_input(
         "인접대지경계선까지 이격거리 (m)",
         value=None,
         min_value=0.0,
-        placeholder="예: 3.0",
+        placeholder="이격거리를 입력하세요",
         help="건축법 제61조·시행령 제86조 일조권 사선제한 판정에 사용됩니다.",
     )
     submitted = st.form_submit_button("🔍 검색")
@@ -333,9 +334,14 @@ with status_col:
             if not items:
                 continue
             st.markdown(f"**{CATEGORY_LABEL[facility_type]}**")
+            if facility_type == "military":
+                # 이 카테고리만 Z값(높이제한)이 암호화된 채로 연산된다는 것을 명시적으로 알려준다 —
+                # 그 외 카테고리(일조권/국가유산)는 공개된 기준치라 평문으로 계산한다.
+                st.caption("🔒 HE(동형암호) 연산 — 서버는 이 시설의 높이제한 기준값을 복호화하지 않습니다.")
             for item in items:
+                is_he = facility_type == "military"
                 badge_class = "zc-badge-critical" if item.exceeds_limit else "zc-badge-ok"
-                badge_text = "위반" if item.exceeds_limit else "적합"
+                badge_text = ("🔒 위반" if is_he else "위반") if item.exceeds_limit else ("🔒 적합" if is_he else "적합")
                 # 군사시설처럼 규정 테마가 여러 개인 시설은 이름 옆에 "어떤 규정을 판단했는지"
                 # 표시한다 — 같은 시설이라도 테마별로 위반/적합이 갈릴 수 있기 때문이다.
                 row_name = (
@@ -349,9 +355,74 @@ with status_col:
                     f'<span class="zc-badge {badge_class}">{badge_text}</span></div>',
                     unsafe_allow_html=True,
                 )
+                if is_he:
+                    st.markdown(
+                        f'<div class="zc-row-note">🔒 암호문(Z) − 평문(계획높이) 동형 뺄셈 → 관리기관 HSM이 '
+                        f"부호만 복호화해 반환 (margin/원본 기준값 없음)</div>",
+                        unsafe_allow_html=True,
+                    )
                 st.markdown(
                     f'<div class="zc-row-note">{html.escape(item.final_message)}</div>',
                     unsafe_allow_html=True,
+                )
+                if is_he:
+                    with st.expander("🔬 이 항목의 실제 암호문 확인"):
+                        cipher_info = describe_ciphertext_for_display(item.facility_id, item.regulation_theme)
+                        if cipher_info:
+                            st.code(cipher_info["hex_preview"] + " …", language=None)
+                            st.caption(
+                                f"전체 {cipher_info['byte_length']:,} bytes 중 앞 48바이트만 표시 "
+                                f"(he_context_version={cipher_info['he_context_version']}) — "
+                                "이 bytes를 아무리 들여다봐도 원본 높이제한값을 복원할 수 없습니다."
+                            )
+                        else:
+                            st.caption("암호문 캐시를 찾을 수 없습니다.")
+                        if item.he_latency_ms is not None:
+                            st.caption(
+                                f"⏱ 이번 요청의 실측 소요시간: he_compute+authority_verify 약 "
+                                f"{item.he_latency_ms:.2f}ms (같은 판정을 평문으로 계산했다면 "
+                                "0.01ms 미만 — 상세 벤치마크는 docs/benchmark_phase7.json 참고)"
+                            )
+
+if report and searched_inputs is not None:
+    military_facility_ids = {item.facility_id for item in report if item.facility_type == "military"}
+    individual_latency_by_facility = {}
+    for item in report:
+        if item.facility_type == "military" and item.he_latency_ms is not None:
+            individual_latency_by_facility.setdefault(item.facility_id, 0.0)
+            individual_latency_by_facility[item.facility_id] += item.he_latency_ms
+
+    for zone in config.MILITARY_ZONES:
+        if zone.facility_id not in military_facility_ids:
+            continue
+        batch_demo = compute_he_batch_demo(zone, searched_inputs[2])
+        if batch_demo is None:
+            continue
+        st.write("")
+        st.markdown('<div class="zc-panel-title">▌ ⚡ CKKS 배치 연산(SIMD) 데모</div>', unsafe_allow_html=True)
+        st.caption(
+            f"{zone.name}의 규정 테마 {len(batch_demo.exceeds_limit_by_theme)}개를 슬롯 여러 개짜리 "
+            "CKKS 벡터 하나로 묶어, 동형 뺄셈 1회 + HSM 복호화 1회로 전부 판정합니다 — "
+            "위 개별 판정과 같은 결과가 나오는지 직접 비교해보세요."
+        )
+        theme_label_by_id = {r.theme_id: r.label for r in zone.regulations}
+        for theme_id, exceeds in batch_demo.exceeds_limit_by_theme.items():
+            st.markdown(
+                f"- **{theme_label_by_id.get(theme_id, theme_id)}**: "
+                f"{'🔴 위반' if exceeds else '🟢 적합'} (배치 연산 결과)"
+            )
+        individual_total_ms = individual_latency_by_facility.get(zone.facility_id)
+        if individual_total_ms is not None:
+            st.caption(
+                f"⏱ 개별 연산 {len(batch_demo.exceeds_limit_by_theme)}회 합산 약 {individual_total_ms:.2f}ms  "
+                f"vs  배치 연산 1회 약 {batch_demo.latency_ms:.2f}ms"
+            )
+        if batch_demo.ciphertext_preview:
+            with st.expander("🔬 배치 암호문 확인"):
+                st.code(batch_demo.ciphertext_preview["hex_preview"] + " …", language=None)
+                st.caption(
+                    f"전체 {batch_demo.ciphertext_preview['byte_length']:,} bytes — 슬롯 "
+                    f"{len(batch_demo.exceeds_limit_by_theme)}개 값이 이 암호문 하나 안에 함께 들어있습니다."
                 )
 
 st.write("")

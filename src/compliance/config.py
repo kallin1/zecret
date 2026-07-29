@@ -13,7 +13,7 @@
 # 기본표면)가 함께 적용되므로, MilitaryZone.regulations에 테마별로 별도 암호문을 둔다.
 
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 from src.db.ciphertext_cache import load_ciphertext
 from src.he.encryption import HeightLimitCiphertext, load_height_limit_ciphertext
@@ -72,7 +72,9 @@ class MilitaryZone:
     """군사시설(보호구역/비행안전구역) 1건 — regulations에 담긴 테마마다 독립적으로 판정한다.
 
     facility_id는 src.db(구조화 기준값 DB)의 동일 facility_id 행과 대조하는 데 쓰인다.
-    zone_subtype은 ZONE_RADIUS_BY_SUBTYPE 조회 키다.
+    zone_subtype은 ZONE_RADIUS_BY_SUBTYPE 조회 키다. batch_height_limit_enc는 regulations의
+    Z값들을 슬롯 여러 개짜리 CKKS 벡터 하나로 묶어 암호화해둔 것(SIMD 배치 데모 전용,
+    slot 순서는 regulations 리스트 순서와 동일) — 아직 생성되지 않았으면 None이다.
     """
 
     facility_id: str
@@ -81,6 +83,7 @@ class MilitaryZone:
     y_plain: float
     zone_subtype: str
     regulations: List[MilitaryRegulationTheme]
+    batch_height_limit_enc: Optional[HeightLimitCiphertext] = field(default=None, repr=False)
 
 
 def zone_radius_m(zone: MilitaryZone) -> float:
@@ -125,6 +128,20 @@ def _load_military_regulation(
     )
 
 
+_BATCH_REGULATION_THEME = "__batch__"
+
+
+def _load_military_batch_ciphertext(facility_id: str) -> Optional[HeightLimitCiphertext]:
+    """CKKS SIMD 배치 데모용 — regulations의 여러 Z값을 슬롯 여러 개짜리 벡터 하나로 묶어
+    암호화해둔 것을 조회한다. 아직 생성되지 않았으면(구버전 캐시) None을 반환해 배치 데모
+    패널만 조용히 숨긴다 — 개별 테마 판정(원칙 1의 핵심 경로, _load_military_regulation)은
+    이 함수와 무관하게 항상 정상 동작한다."""
+    row = load_ciphertext(facility_id, _BATCH_REGULATION_THEME)
+    if row is None:
+        return None
+    return load_height_limit_ciphertext(row["ciphertext_blob"])
+
+
 # 성남 서울공항(성남비행장/K-16, 공군 제15특수임무비행단) — 경기도 성남시 수정구 심곡동
 # 일대. 좌표는 항공정보간행물(AIP) 공개 기준점(ARP) 수준 근사치(위도 37-26N, 경도 127-07E)이며
 # 활주로 등 정밀 시설 좌표가 아니다. 군사기지 및 군사시설 보호법상 제한보호구역(제9조)과
@@ -150,5 +167,6 @@ MILITARY_ZONES: List[MilitaryZone] = [
                 "군사기지 및 군사시설 보호법 제10조 (비행안전구역 기본표면)",
             ),
         ],
+        batch_height_limit_enc=_load_military_batch_ciphertext("military_seongnam_airport"),
     ),
 ]

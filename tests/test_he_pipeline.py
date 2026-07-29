@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 from src.compliance.config import MILITARY_ZONES
-from src.graph.runner import run_full_compliance_check
+from src.graph.runner import compute_he_batch_demo, run_full_compliance_check
 from src.he.encryption import HeightLimitCiphertext, compute_diff_ciphertext
 from tests.he_test_helpers import encrypt_for_test
 
@@ -77,6 +77,51 @@ def test_military_zone_ciphertext_holds_only_bytes():
         assert isinstance(regulation.height_limit_enc.ciphertext_enc, bytes)
         field_names = {f for f in vars(regulation.height_limit_enc)}
         assert field_names == {"ciphertext_enc"}
+
+
+# --- CKKS SIMD 배치 데모 (요청: "z암호화 연산을 더 강하게 보여줄 방법") ---
+# 규정 테마 여러 개의 Z값을 슬롯 1개짜리 벡터 여러 개로 나누지 않고, 슬롯 N개짜리 벡터
+# 하나로 묶어 동형 뺄셈 1회 + HSM 복호화 1회로 전부 판정한다. 공식 판정 경로
+# (run_full_compliance_check, 테마별 개별 he_compute+authority_verify)와는 완전히
+# 별개의 데모 전용 경로라, 결과가 서로 일치하는지가 이 테스트의 핵심이다.
+
+
+def test_batch_demo_matches_individual_theme_results():
+    """배치 연산(슬롯 N개짜리 벡터 1개) 결과가 개별 판정(테마별 벡터 각각)과 정확히 일치해야 한다."""
+    zone = MILITARY_ZONES[0]
+    for plan_height in [30.0, 45.0 + 1e-6, 50.0, 65.0]:
+        individual_results = {
+            regulation.theme_id: run_full_compliance_check(
+                zone.x_plain, zone.y_plain, plan_height, setback_distance_m=3.0
+            )
+            for regulation in zone.regulations
+        }
+        batch_demo = compute_he_batch_demo(zone, plan_height)
+        assert batch_demo is not None
+        for regulation in zone.regulations:
+            individual_item = next(
+                item
+                for item in individual_results[regulation.theme_id]
+                if item.facility_type == "military" and item.regulation_theme == regulation.theme_id
+            )
+            assert batch_demo.exceeds_limit_by_theme[regulation.theme_id] == individual_item.exceeds_limit
+
+
+def test_batch_demo_ciphertext_preview_has_no_plaintext_numbers():
+    zone = MILITARY_ZONES[0]
+    batch_demo = compute_he_batch_demo(zone, 50.0)
+    assert batch_demo.ciphertext_preview is not None
+    assert batch_demo.ciphertext_preview["byte_length"] > 0
+    assert "45" not in batch_demo.ciphertext_preview["hex_preview"]
+    assert "60" not in batch_demo.ciphertext_preview["hex_preview"]
+
+
+def test_batch_demo_returns_none_without_batch_ciphertext():
+    """배치 암호문이 없는(테마 1개뿐이거나 캐시 미생성) 시설은 조용히 None을 반환한다."""
+    from dataclasses import replace
+
+    single_theme_zone = replace(MILITARY_ZONES[0], regulations=MILITARY_ZONES[0].regulations[:1])
+    assert compute_he_batch_demo(single_theme_zone, 50.0) is None
 
 
 def _collect_imported_names(module_path: Path):

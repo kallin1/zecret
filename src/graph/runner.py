@@ -8,13 +8,16 @@
 # 전혀 건드리지 않는다 — "어떤 시설에 대해 그래프를 실행할지"를 정하는 열거(enumeration)
 # 만 이 모듈이 새로 담당한다 (search_zone_node와 동일한 반경 규칙, CLAUDE.md 체크포인트 ②).
 
+import time
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from langgraph.graph import END, StateGraph
 
+from scripts.mock_authority_verify import verify_diff_vector
 from src.compliance import config
 from src.compliance.geo_utils import haversine_m
+from src.db.ciphertext_cache import describe_ciphertext_for_display
 from src.graph.nodes import (
     SUNLIGHT_SETBACK_FACILITY_ID,
     SUNLIGHT_SETBACK_FACILITY_NAME,
@@ -26,6 +29,7 @@ from src.graph.nodes import (
 )
 from src.graph.state import ComplianceState
 from src.graph.tracing import traced_node
+from src.he.encryption import compute_diff_ciphertext
 
 
 def _build_military_subgraph():
@@ -85,11 +89,16 @@ class CategoryResult:
     final_message: str
     regulation_theme: str = "default"
     regulation_label: str = ""
+    # 군사시설(HE 경로)에서만 채워짐 — he_compute+authority_verify 두 노드의 실측 소요시간(ms).
+    # 화면에서 "정말 암호문 연산을 하고 있다"는 것을 실측치로 보여주기 위한 순수 표시용
+    # 필드이며 판정 로직에는 전혀 관여하지 않는다.
+    he_latency_ms: Optional[float] = None
 
 
-def _to_category_result(state: ComplianceState) -> CategoryResult:
+def _to_category_result(state: ComplianceState, he_latency_ms: Optional[float] = None) -> CategoryResult:
     result = state["computation_result"]
     return CategoryResult(
+        he_latency_ms=he_latency_ms,
         facility_type=state["facility_type"],
         facility_id=state["facility_id"],
         facility_name=state["facility_name"],
@@ -98,6 +107,45 @@ def _to_category_result(state: ComplianceState) -> CategoryResult:
         final_message=state["final_message"],
         regulation_theme=state.get("regulation_theme") or "default",
         regulation_label=state.get("regulation_label") or "",
+    )
+
+
+@dataclass
+class BatchDemoResult:
+    """CKKS SIMD 배치 데모 1건 — 공식 판정(CategoryResult)과 무관한 순수 시연용 결과다.
+
+    zone.regulations의 Z값들을 슬롯 하나짜리 벡터 여러 개가 아니라 슬롯 여러 개짜리 벡터
+    하나로 미리 암호화해둔 것(zone.batch_height_limit_enc)에 대해, 동형 뺄셈 1회 + HSM
+    복호화 1회로 모든 테마를 동시에 판정한다.
+    """
+
+    facility_name: str
+    exceeds_limit_by_theme: Dict[str, bool]
+    latency_ms: float
+    ciphertext_preview: Optional[Dict[str, Any]]
+
+
+def compute_he_batch_demo(zone: config.MilitaryZone, plan_height_plain: float) -> Optional[BatchDemoResult]:
+    """군사시설 1건의 여러 규정 테마를 CKKS 벡터 하나로 배치 처리하는 데모.
+
+    zone.batch_height_limit_enc가 없으면(구버전 캐시 등) None을 반환해 호출부가 조용히
+    데모 패널만 숨기게 한다 — 공식 판정 경로(run_full_compliance_check)는 이 함수를
+    전혀 거치지 않으므로 이 함수의 성공/실패가 판정 결과에 영향을 주지 않는다.
+    """
+    if zone.batch_height_limit_enc is None or len(zone.regulations) < 2:
+        return None
+
+    start = time.perf_counter()
+    diff = compute_diff_ciphertext(zone.batch_height_limit_enc, plan_height_plain)
+    theme_ids = [regulation.theme_id for regulation in zone.regulations]
+    exceeds_list = verify_diff_vector(diff.diff_enc, slot_count=len(theme_ids))
+    latency_ms = round((time.perf_counter() - start) * 1000, 2)
+
+    return BatchDemoResult(
+        facility_name=zone.name,
+        exceeds_limit_by_theme=dict(zip(theme_ids, exceeds_list)),
+        latency_ms=latency_ms,
+        ciphertext_preview=describe_ciphertext_for_display(zone.facility_id, "__batch__"),
     )
 
 
@@ -149,17 +197,25 @@ def run_full_compliance_check(
         if haversine_m(plan_x_plain, plan_y_plain, zone.x_plain, zone.y_plain) > config.zone_radius_m(zone):
             continue
         for regulation in zone.regulations:
-            military_state = _MILITARY_SUBGRAPH.invoke(
-                {
-                    "facility_type": "military",
-                    "facility_id": zone.facility_id,
-                    "facility_name": zone.name,
-                    "plan_height": plan_height_plain,
-                    "setback_distance": setback_distance_m,
-                    "regulation_theme": regulation.theme_id,
-                    "regulation_label": regulation.label,
-                }
-            )
-            results.append(_to_category_result(military_state))
+            state_input = {
+                "facility_type": "military",
+                "facility_id": zone.facility_id,
+                "facility_name": zone.name,
+                "plan_height": plan_height_plain,
+                "setback_distance": setback_distance_m,
+                "regulation_theme": regulation.theme_id,
+                "regulation_label": regulation.label,
+            }
+
+            # he_compute_node/authority_verify_node는 순수 함수(부작용 없음)라, 실제 판정에 쓰는
+            # 서브그래프 실행과 별개로 한 번 더 호출해도 결과에 영향이 없다 — 화면에 "진짜로
+            # 암호문 연산이 일어난다"는 것을 실측 소요시간으로 보여주기 위한 표시 전용 측정이다.
+            he_start = time.perf_counter()
+            he_result = he_compute_node(state_input)
+            authority_verify_node({**state_input, **he_result})
+            he_latency_ms = round((time.perf_counter() - he_start) * 1000, 2)
+
+            military_state = _MILITARY_SUBGRAPH.invoke(state_input)
+            results.append(_to_category_result(military_state, he_latency_ms=he_latency_ms))
 
     return results
